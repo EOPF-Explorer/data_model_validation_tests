@@ -1,0 +1,45 @@
+# Dataset configuration for Sentinel-2 L2A (EOPF CPM Zarr format)
+# Set EOPF_DATASET_CONFIG=configs/sentinel2_l2a.toml (this is the default)
+
+[dataset]
+name = "Sentinel-2 L2A"
+description = "EOPF CPM Zarr format, accessed via GDAL Zarr driver over vsicurl"
+
+# Band opened for metadata, export, reproject, overviews, and conventions tests
+[default_band]
+zarr_path = "/measurements/reflectance/r10m/b02"
+
+[expected]
+# EPSG authority code to assert in the dataset CRS. Omit to skip the check.
+crs_authority_code = "32630"
+
+# Expected chunk/block size [x, y]. Omit to skip the check.
+block_size = [244, 244]
+
+# Minimum number of overview levels expected.
+min_overview_count = 3
+
+# Upper bound on network bytes for a single-chunk partial read.
+partial_read_max_kb = 1024
+
+# RGB bands for the true-colour composite (Task 5). Remove this section to skip the test.
+[rgb_composite]
+red   = "/measurements/reflectance/r10m/b04"
+green = "/measurements/reflectance/r10m/b03"
+blue  = "/measurements/reflectance/r10m/b02"
+
+# Resolution bands to validate (Task 7). One entry per resolution to check.
+[[resolution_bands]]
+zarr_path            = "/measurements/reflectance/r10m/b02"
+label                = "r10m"
+expected_pixel_size_m = 10.0
+
+[[resolution_bands]]
+zarr_path            = "/measurements/reflectance/r20m/b05"
+label                = "r20m"
+expected_pixel_size_m = 20.0
+
+[[resolution_bands]]
+zarr_path            = "/measurements/reflectance/r60m/b01"
+label                = "r60m"
+expected_pixel_size_m = 60.0

@@ -1,0 +1,7 @@
+[project]
+name = "eopf-validation-tests"
+requires-python = ">=3.11"
+dependencies = ["pytest>=9"]
+
+[tool.pytest.ini_options]
+testpaths = ["gdal"]

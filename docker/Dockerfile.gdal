@@ -1,0 +1,16 @@
+FROM ghcr.io/osgeo/gdal:ubuntu-full-latest
+
+WORKDIR /workspace
+
+# Install pytest (only runtime dependency beyond GDAL)
+RUN pip install --no-cache-dir "pytest>=9"
+
+# Copy test suite and bash script
+COPY pyproject.toml helpers.py conftest.py validate_gdal.sh ./
+COPY configs/ configs/
+COPY gdal/ gdal/
+
+# Output dir (override with -v host/output:/workspace/output)
+RUN mkdir -p output/images
+
+CMD ["pytest", "-v"]
