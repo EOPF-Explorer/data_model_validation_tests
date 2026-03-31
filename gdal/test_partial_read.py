@@ -45,4 +45,10 @@ def test_partial_read(dataset_url, dataset_config, output_dir, report, gdal_vers
         duration=duration,
         details=details,
         network_bytes=net_bytes if net_bytes > 0 else None,
+        cli_commands=[
+            f"CPL_VSIL_SHOW_NETWORK_STATS=YES \\\n"
+            f"  gdal_translate '{url}' out_partial.tif \\\n"
+            f"  -srcwin 0 0 {bx} {bx} -q"
+        ],
+        output_snippet=result.stdout or result.stderr,
     ))

@@ -48,4 +48,10 @@ def test_overviews(dataset_url, dataset_config, output_dir, report, gdal_version
         duration=duration,
         details=f"{ovr_count} overview levels; coarsest: {size_kb} KB; network: {net_display}",
         network_bytes=net_bytes if net_bytes > 0 else None,
+        cli_commands=[
+            f"gdalinfo '{url}'",
+            f"CPL_VSIL_SHOW_NETWORK_STATS=YES \\\n"
+            f"  gdal_translate '{url}' overview.tif -ovr 0 -q",
+        ],
+        output_snippet=info.stdout,
     ))

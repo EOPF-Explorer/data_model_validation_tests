@@ -33,4 +33,9 @@ def test_export(dataset_url, dataset_config, output_dir, report, gdal_version):
         passed=True,
         duration=duration,
         details=f"Exported to {Path(out_file).name}, CRS=EPSG:{cfg.crs_authority_code} verified",
+        cli_commands=[
+            f"gdal_translate '{url}' band.tif -q",
+            f"gdalinfo band.tif",
+        ],
+        output_snippet=info.stdout if cfg.crs_authority_code else result.stderr,
     ))

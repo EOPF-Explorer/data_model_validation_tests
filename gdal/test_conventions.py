@@ -37,4 +37,6 @@ def test_conventions(dataset_url, dataset_config, report, gdal_version):
         passed=True,
         duration=duration,
         details="driver=Zarr CRS=present GeoTransform=non-default",
+        cli_commands=[f"gdalinfo -json '{url}'"],
+        output_snippet=result.stdout[:2000],
     ))

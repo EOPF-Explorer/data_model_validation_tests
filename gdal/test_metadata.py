@@ -53,4 +53,6 @@ def test_metadata(dataset_url, dataset_config, report, gdal_version):
         passed=True,
         duration=duration,
         details=" ".join(details),
+        cli_commands=[f"gdalinfo '{url}'"],
+        output_snippet=out,
     ))

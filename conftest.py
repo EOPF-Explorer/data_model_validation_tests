@@ -1,7 +1,10 @@
 """Root-level pytest fixtures for GDAL CLI validation tests."""
 
 import os
+import platform
 import subprocess
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -38,12 +41,31 @@ def report(output_dir, dataset_url):
     """Collects test results and writes a markdown report at session end."""
     collector = ReportCollector()
 
-    # Populate environment info
-    result = subprocess.run(
+    gdal_version_result = subprocess.run(
         ["gdalinfo", "--version"], capture_output=True, text=True, check=False
     )
-    collector.env_info["GDAL version"] = result.stdout.strip() if result.returncode == 0 else "unknown"
+    gdal_version = (
+        gdal_version_result.stdout.strip()
+        if gdal_version_result.returncode == 0
+        else "unknown"
+    )
+
+    # Optional: gdal-config --formats for build info (may not be present in all envs)
+    gdal_formats_result = subprocess.run(
+        ["gdal-config", "--formats"], capture_output=True, text=True, check=False
+    )
+    gdal_formats = (
+        gdal_formats_result.stdout.strip()
+        if gdal_formats_result.returncode == 0
+        else "unavailable"
+    )
+
+    collector.env_info["GDAL version"] = gdal_version
+    collector.env_info["GDAL formats"] = gdal_formats
+    collector.env_info["Python version"] = sys.version.split()[0]
+    collector.env_info["Platform"] = platform.platform()
     collector.env_info["Dataset URL"] = dataset_url
+    collector.env_info["Date"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     yield collector
 

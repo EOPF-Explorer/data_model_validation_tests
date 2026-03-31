@@ -2,8 +2,14 @@ FROM ghcr.io/osgeo/gdal:ubuntu-full-latest
 
 WORKDIR /workspace
 
-# Install pytest (only runtime dependency beyond GDAL)
-RUN pip install --no-cache-dir "pytest>=9"
+# Base image has Python but no pip; use a venv for pytest (avoids PEP 668 / system Python)
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir "pytest>=9"
+
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy test suite and bash script
 COPY pyproject.toml helpers.py conftest.py validate_gdal.sh ./

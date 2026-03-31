@@ -2,7 +2,7 @@
 
 Validates GDAL's GeoZarr/EOPF Zarr support against a remote dataset accessed over HTTP.
 All GDAL interaction goes through CLI tools (`gdalinfo`, `gdal_translate`, `gdalwarp`, `gdalbuildvrt`) — no Python bindings.
-Produces a markdown report with pass/fail results, images, and network statistics.
+Produces a structured markdown report covering environment info, per-task results with copy-pasteable CLI commands, screenshots, network efficiency, issues, and a conclusion.
 
 Two runners are provided:
 
@@ -69,6 +69,21 @@ Results:
 - `output/report_bash.md`
 - `output/images/rgb_composite_bash.png`
 
+## Report structure
+
+Both runners produce a report with the same six sections:
+
+| # | Section | Content |
+|---|---------|---------|
+| 1 | **Environment** | GDAL version and formats, Python version, platform, dataset URL, run date |
+| 2 | **Test Results** | Pass/fail table + per-task detail blocks with reference CLI commands and collapsible command output |
+| 3 | **Screenshots / Images** | Embedded PNG artifacts (RGB composite, reprojected image) |
+| 4 | **Network Efficiency** | Downloaded bytes vs budget for Tasks 2 and 6, using `CPL_VSIL_SHOW_NETWORK_STATS` |
+| 5 | **Issues Found** | Auto-populated from failed tasks; "No issues found" when all pass |
+| 6 | **Conclusion** | Per-task capability summary; confirms contracted scope is delivered when all tests pass |
+
+The CLI commands in Section 2 use the actual dataset URL and band paths, so any reader can copy-paste and replicate a test independently.
+
 ## Configuration
 
 ### pytest
@@ -91,6 +106,8 @@ All values are set via environment variables with sensible defaults for the refe
 | `EXPECTED_BLOCK_SIZE` | `244` | Expected block/chunk size |
 | `PARTIAL_READ_MAX_KB` | `1024` | Network budget for Task 2 |
 | `MIN_OVERVIEW_COUNT` | `3` | Minimum overview levels required |
+| `VIS_SCALE_MIN` | `0.0` | Lower bound for `-scale` when generating PNG thumbnails (Float32 reflectance) |
+| `VIS_SCALE_MAX` | `0.3` | Upper bound for `-scale` (0.3 = 30 % reflectance, typical S2 L2A land range) |
 
 ## Project structure
 
@@ -116,6 +133,7 @@ validation_tests/
     ├── test_resolutions.py  # Task 7: Multi-resolution pixel sizes
     └── test_conventions.py  # Task 8: GeoZarr conventions
 ```
+
 
 ## Makefile targets
 

@@ -39,5 +39,7 @@ def test_resolution(dataset_url, dataset_config, report, gdal_version, band_inde
         name=f"7. Resolution {band.label}",
         passed=True,
         duration=duration,
-        details=f"{band.label}={pixel_x}m (expected {band.expected_pixel_size_m}m)",
+        details=f"{band.label}={pixel_x:g}m (expected {band.expected_pixel_size_m:g}m)",
+        cli_commands=[f"gdalinfo '{url}'"],
+        output_snippet=result.stdout,
     ))
