@@ -12,14 +12,14 @@ Tracks tasks from [EOPF-Explorer/coordination#235](https://github.com/EOPF-Explo
 
 | Task | CLI tool(s) | Description |
 |------|-------------|-------------|
-| 1 | `gdalinfo` | CRS, overview count, block size |
+| 1 | `gdalinfo` + `CPL_VSIL_SHOW_NETWORK_STATS` | CRS, pixel size, overview count, block size, band metadata (Scale/Offset/NoData/units), consolidated HEAD request count |
 | 2 | `gdal_translate -srcwin` + `CPL_VSIL_SHOW_NETWORK_STATS` | Single-chunk read, network bytes within configured limit |
 | 3 | `gdal_translate` → GeoTIFF + `gdalinfo` | Export band → GeoTIFF, verify CRS preserved |
-| 4 | `gdalwarp -t_srs EPSG:4326` + `gdalinfo` | Reproject to EPSG:4326 |
+| 4 | `gdalwarp -t_srs EPSG:4326` + `gdalinfo` + `gdal_translate -of PNG` | Reproject to EPSG:4326, render PNG thumbnail with vis_scale, visual quality check |
 | 5 | `gdalbuildvrt -separate` + `gdal_translate -of PNG` | RGB composite rendered to PNG |
 | 6 | `gdal_translate -ovr 0` + `CPL_VSIL_SHOW_NETWORK_STATS` | Read coarsest overview, report size and network bytes |
 | 7 | `gdalinfo` × 3 bands | Pixel sizes for r10m / r20m / r60m bands |
-| 8 | `gdalinfo -json` | GeoZarr conventions: driver=Zarr, CRS present, non-default GeoTransform |
+| 8 | `gdalinfo -json` + `gdalinfo -mdd all` | GeoZarr conventions: driver=Zarr, CRS present, non-default GeoTransform, spatial/proj extension keys, grid mapping |
 
 All dataset-specific values (band paths, expected CRS, pixel sizes, block size, …) are read from
 `configs/sentinel2_l2a.toml`.
@@ -36,11 +36,14 @@ All dataset-specific values (band paths, expected CRS, pixel sizes, block size, 
 ```bash
 make docker-build
 
-# In Docker
+# In Docker — uses the default dataset URL already set in the Makefile
+make test
+
+# Override the dataset URL if needed
 EOPF_DATASET_URL=https://host/path/S2A_MSIL2A_....zarr make test
 
-# Locally
-EOPF_DATASET_URL=https://host/path/S2A_MSIL2A_....zarr make test-local
+# Locally (requires GDAL CLI + Python ≥ 3.11 + pytest)
+make test-local
 ```
 
 Results:
@@ -80,6 +83,8 @@ validation_tests/
 │   └── sentinel2_l2a.toml  # Dataset config (band paths, CRS, thresholds, …)
 ├── docker/
 │   └── Dockerfile.gdal     # GDAL + pytest image
+├── scripts/
+│   └── gdal-docker.sh      # Run GDAL CLI tools from Docker without building the full image
 └── gdal/
     ├── conftest.py          # GDAL version fixture
     ├── test_metadata.py     # Task 1: CRS, overviews, block size
