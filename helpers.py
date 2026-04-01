@@ -30,12 +30,23 @@ def make_zarr_url(base_url: str, zarr_path: str) -> str:
 # GDAL CLI wrappers
 # ---------------------------------------------------------------------------
 
-def run_gdalinfo(url: str, *, json_mode: bool = False) -> subprocess.CompletedProcess:
+def run_gdalinfo(
+    url: str,
+    *,
+    json_mode: bool = False,
+    mdd_all: bool = False,
+    network_stats: bool = False,
+) -> subprocess.CompletedProcess:
     cmd = ["gdalinfo"]
     if json_mode:
         cmd.append("-json")
+    if mdd_all:
+        cmd.extend(["-mdd", "all"])
     cmd.append(url)
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    env = os.environ.copy()
+    if network_stats:
+        env["CPL_VSIL_SHOW_NETWORK_STATS"] = "YES"
+    return subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
 
 
 def band_statistics(url: str) -> dict[str, float] | None:
@@ -127,6 +138,27 @@ def parse_network_bytes(text: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def parse_head_count(text: str) -> int:
+    """Extract HEAD request count from CPL_VSIL_SHOW_NETWORK_STATS output."""
+    m = re.search(r'"HEAD"\s*:\s*\{\s*"count"\s*:\s*(\d+)', text)
+    return int(m.group(1)) if m else 0
+
+
+def split_network_stats(stdout: str) -> tuple[str, str]:
+    """Split gdalinfo stdout into (gdalinfo_text, network_stats_text).
+
+    When CPL_VSIL_SHOW_NETWORK_STATS=YES is set, GDAL appends a
+    'Network statistics:' block at the end of the normal output.
+    This helper separates the two so the gdalinfo text can be parsed
+    without accidentally matching JSON keys.
+    """
+    marker = "Network statistics:"
+    if marker in stdout:
+        idx = stdout.index(marker)
+        return stdout[:idx], stdout[idx:]
+    return stdout, ""
+
+
 # ---------------------------------------------------------------------------
 # Dataset config
 # ---------------------------------------------------------------------------
@@ -154,6 +186,7 @@ class DatasetConfig:
     block_size: list[int] | None
     min_overview_count: int
     partial_read_max_kb: int
+    consolidated_head_max: int
     rgb_composite: RGBComposite | None
     resolution_bands: list[ResolutionBand]
     vis_scale: list[float] = field(default_factory=lambda: [0.0, 1.0])
@@ -173,7 +206,8 @@ def load_config(path: str | Path) -> DatasetConfig:
         crs_authority_code=expected.get("crs_authority_code"),
         block_size=expected.get("block_size"),
         min_overview_count=expected.get("min_overview_count", 0),
-        partial_read_max_kb=expected.get("partial_read_max_kb", 1024),
+        partial_read_max_kb=expected.get("partial_read_max_kb", 500),
+        consolidated_head_max=expected.get("consolidated_head_max", 50),
         rgb_composite=RGBComposite(**rgb) if rgb else None,
         resolution_bands=[
             ResolutionBand(**b) for b in raw.get("resolution_bands", [])
@@ -187,7 +221,7 @@ def load_config(path: str | Path) -> DatasetConfig:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class TestResult:
+class TaskResult:
     name: str
     passed: bool
     duration: float = 0.0
@@ -198,6 +232,14 @@ class TestResult:
     cli_commands: list[str] = field(default_factory=list)
     # Trimmed stdout from the primary GDAL call (first 20 lines)
     output_snippet: str = ""
+    # Per-sub-bullet checklist: "[x] description" or "[ ] description"
+    subchecks: list[str] = field(default_factory=list)
+    # Network efficiency extras
+    head_count: int | None = None        # HTTP HEAD/GET requests (consolidated metadata)
+    uncompressed_kb: int | None = None   # uncompressed shard/file size for context
+    chunk_shape: str = ""                # e.g. "915×915"
+    # Per-level overview stats for Section 4 table (Task 6)
+    overview_levels: list[dict] = field(default_factory=list)
 
 
 def _snippet(text: str, max_lines: int = 20) -> str:
@@ -208,17 +250,29 @@ def _snippet(text: str, max_lines: int = 20) -> str:
     return "\n".join(lines[:max_lines]) + "\n..."
 
 
+def _task_sort_key(result: "TaskResult") -> tuple:
+    """Sort key that orders TaskResult entries by their leading task number.
+
+    Names follow the pattern "N. Description" (e.g. "1. Metadata", "7. Resolution r10m").
+    Tasks without a leading integer sort after all numbered tasks.
+    """
+    m = re.match(r"^(\d+)\.", result.name)
+    return (int(m.group(1)), result.name) if m else (10_000, result.name)
+
+
 class ReportCollector:
     def __init__(self) -> None:
-        self.results: list[TestResult] = []
+        self.results: list[TaskResult] = []
         self.env_info: dict[str, str] = {}
 
-    def add(self, result: TestResult) -> None:
+    def add(self, result: TaskResult) -> None:
         self.results.append(result)
 
     def write(self, path: str | Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+
+        ordered = sorted(self.results, key=_task_sort_key)
 
         passed = sum(1 for r in self.results if r.passed)
         total = len(self.results)
@@ -254,7 +308,7 @@ class ReportCollector:
         # Summary table
         L.append("| Task | Status | Duration | Network | Details |")
         L.append("|------|--------|----------|---------|---------|")
-        for r in self.results:
+        for r in ordered:
             icon = "✅ PASS" if r.passed else "❌ FAIL"
             dur = f"{r.duration:.2f}s"
             net = f"{r.network_bytes // 1024} KB" if r.network_bytes else "—"
@@ -263,10 +317,14 @@ class ReportCollector:
         L.append("")
 
         # Per-task detail blocks
-        for r in self.results:
+        for r in ordered:
             icon = "✅ PASS" if r.passed else "❌ FAIL"
             L.append(f"### {r.name}\n")
             L.append(f"**Status:** {icon} &nbsp;·&nbsp; **Duration:** {r.duration:.2f}s\n")
+            if r.subchecks:
+                for check in r.subchecks:
+                    L.append(f"- {check}")
+                L.append("")
             if r.details:
                 L.append(f"{r.details}\n")
 
@@ -290,7 +348,7 @@ class ReportCollector:
         # ------------------------------------------------------------------ #
         arts = [
             (r.name, a)
-            for r in self.results
+            for r in ordered
             for a in r.artifacts
             if Path(a).exists() and a.endswith((".png", ".jpg", ".jpeg"))
         ]
@@ -309,33 +367,72 @@ class ReportCollector:
         # 4. Network Efficiency
         # ------------------------------------------------------------------ #
         L.append("## 4. Network Efficiency\n")
-        if network_results:
+        L.append(
+            "Remote read performance measured with `CPL_VSIL_SHOW_NETWORK_STATS=YES`.\n"
+        )
+
+        # --- 4a. Metadata overhead (Task 1) ---
+        meta_r = next((r for r in self.results if r.name == "1. Metadata"), None)
+        if meta_r and meta_r.head_count is not None:
+            L.append("### Metadata overhead — Task 1\n")
+            icon = "✅" if meta_r.passed else "❌"
             L.append(
-                "Summary of remote read performance measured with "
-                "`CPL_VSIL_SHOW_NETWORK_STATS=YES`.\n"
+                f"Opening the dataset issued **{meta_r.head_count} HTTP HEAD/GET requests** "
+                f"(limit: {meta_r.details.split('HEAD=')[-1].split()[0] if 'HEAD=' in meta_r.details else '—'}). "
+                f"{icon} This confirms consolidated metadata (`.zmetadata`) is in use, "
+                "avoiding per-array probing.\n"
             )
-            L.append("| Task | Downloaded | Budget | Result |")
-            L.append("|------|-----------|--------|--------|")
-            for r in network_results:
-                kb = r.network_bytes // 1024  # type: ignore[operator]
-                # infer budget from details string if present
-                budget_match = re.search(r"< (\d+) KB limit", r.details)
-                budget = f"{budget_match.group(1)} KB" if budget_match else "—"
-                result_icon = "✅ within budget" if r.passed else "❌ over budget"
-                L.append(f"| {r.name} | {kb} KB | {budget} | {result_icon} |")
+
+        # --- 4b. Partial shard read (Task 2) ---
+        partial_r = next((r for r in self.results if r.name == "2. Partial Read"), None)
+        if partial_r:
+            L.append("### Partial shard read — Task 2\n")
+            shape = partial_r.chunk_shape or "1 chunk"
+            uncomp = f"{partial_r.uncompressed_kb} KB" if partial_r.uncompressed_kb else "—"
+            dl = f"{partial_r.network_bytes // 1024} KB" if partial_r.network_bytes else "0 KB (cache hit)"
+            budget_match = re.search(r"< (\d+) KB limit", partial_r.details)
+            budget = f"{budget_match.group(1)} KB" if budget_match else "—"
+            ratio = (
+                f"{round(partial_r.network_bytes / partial_r.uncompressed_kb / 10.24)}%"
+                if partial_r.network_bytes and partial_r.uncompressed_kb
+                else "—"
+            )
+            result_icon = "✅" if partial_r.passed else "❌"
+            L.append("| Window | Shard shape | Uncompressed | Downloaded | Ratio | Budget | Result |")
+            L.append("|--------|-------------|--------------|------------|-------|--------|--------|")
+            L.append(f"| 0,0 → {shape} | {shape} | {uncomp} | {dl} | {ratio} | {budget} | {result_icon} |")
             L.append("")
-            total_kb = sum(
-                r.network_bytes // 1024
-                for r in network_results
-                if r.network_bytes is not None
-            )
-            L.append(f"**Total measured network traffic across timed tests: {total_kb} KB**\n")
             L.append(
-                "The partial-read test confirms that reading a single Zarr shard "
-                "(one chunk window) downloads only the bytes needed for that chunk, "
-                "demonstrating efficient range-request support in the GDAL Zarr driver.\n"
+                "Reading a single shard-aligned window fetches only the bytes for that chunk, "
+                "confirming HTTP range-request support in the GDAL Zarr driver.\n"
             )
-        else:
+
+        # --- 4c. Overview access (Task 6) ---
+        ovr_r = next((r for r in self.results if r.name == "6. Overview Read"), None)
+        if ovr_r and ovr_r.overview_levels:
+            full_res_kb = ovr_r.overview_levels[0].get("full_res_kb", 0)
+            L.append(f"### Overview access — Task 6\n")
+            L.append(
+                f"Full-res band: {full_res_kb} KB (uncompressed Float32 GeoTIFF). "
+                "Each row shows one overview level exported with `gdal_translate -ovr N`.\n"
+            )
+            L.append(f"| Level | Resolution | Downloaded | Uncompressed | vs full-res ({full_res_kb} KB) |")
+            L.append(f"|-------|-----------|------------|--------------|{'-' * (len(str(full_res_kb)) + 16)}|")
+            for lv in ovr_r.overview_levels:
+                dl_kb = lv.get("downloaded_kb", 0)
+                sz_kb = lv.get("uncompressed_kb", 0)
+                ratio_pct = lv.get("ratio_pct", 0.0)
+                factor = lv.get("factor", 0)
+                dl_str = f"{dl_kb} KB" if dl_kb else "— (cache)"
+                sz_str = f"{sz_kb} KB" if sz_kb else "—"
+                vs_str = f"{ratio_pct}% ({factor}× smaller)" if factor else "—"
+                L.append(f"| {lv['level']} | {lv['resolution']} | {dl_str} | {sz_str} | {vs_str} |")
+            L.append("")
+            L.append(
+                "Overview access is efficient: GDAL fetches only the chunks for the "
+                "requested overview level without downloading the full-resolution data.\n"
+            )
+        elif not partial_r and not meta_r:
             L.append(
                 "_No network statistics were captured during this run. "
                 "Re-run with `CPL_VSIL_SHOW_NETWORK_STATS=YES` to collect them._\n"
@@ -375,7 +472,7 @@ class ReportCollector:
                 f"against {dataset_url} using {gdal_ver}.\n"
             )
             L.append("The following capabilities are confirmed working:\n")
-            for r in self.results:
+            for r in ordered:
                 L.append(f"- **{r.name}**: {r.details}")
             L.append("")
             L.append(

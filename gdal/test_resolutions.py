@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from helpers import TestResult, make_zarr_url, run_gdalinfo
+from helpers import TaskResult, make_zarr_url, run_gdalinfo
 
 
 @pytest.mark.parametrize(
@@ -35,11 +35,17 @@ def test_resolution(dataset_url, dataset_config, report, gdal_version, band_inde
     )
 
     duration = time.monotonic() - start
-    report.add(TestResult(
+    res_ok = abs(pixel_x - band.expected_pixel_size_m) <= 1.0
+    subchecks = [
+        f"[{'x' if res_ok else ' '}] {band.label} band: pixel size={pixel_x:g}m (expect {band.expected_pixel_size_m:g}m)",
+    ]
+
+    report.add(TaskResult(
         name=f"7. Resolution {band.label}",
         passed=True,
         duration=duration,
         details=f"{band.label}={pixel_x:g}m (expected {band.expected_pixel_size_m:g}m)",
+        subchecks=subchecks,
         cli_commands=[f"gdalinfo '{url}'"],
         output_snippet=result.stdout,
     ))

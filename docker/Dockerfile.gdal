@@ -11,8 +11,8 @@ RUN apt-get update \
 
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy test suite and bash script
-COPY pyproject.toml helpers.py conftest.py validate_gdal.sh ./
+# Copy test suite
+COPY pyproject.toml helpers.py conftest.py ./
 COPY configs/ configs/
 COPY gdal/ gdal/
 

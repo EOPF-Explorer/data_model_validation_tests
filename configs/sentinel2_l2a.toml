@@ -1,9 +1,9 @@
-# Dataset configuration for Sentinel-2 L2A (EOPF CPM Zarr format)
+# Dataset configuration for Sentinel-2 L2A (EOPF GeoZarr format)
 # Set EOPF_DATASET_CONFIG=configs/sentinel2_l2a.toml (this is the default)
 
 [dataset]
 name = "Sentinel-2 L2A"
-description = "EOPF CPM Zarr format, accessed via GDAL Zarr driver over vsicurl"
+description = "EOPF Geo Zarr format, accessed via GDAL Zarr driver over vsicurl"
 # Float32 surface reflectance range for thumbnail visualisation.
 # gdalinfo -stats on the source band reports: min≈-0.05, max≈1.61, mean≈0.04.
 # Using 0.0–0.3 maps the typical land reflectance range to the full 8-bit output;
@@ -17,16 +17,23 @@ zarr_path = "/measurements/reflectance/r10m/b02"
 
 [expected]
 # EPSG authority code to assert in the dataset CRS. Omit to skip the check.
+# T30VVK tile = WGS 84 / UTM zone 30N = EPSG:32630
 crs_authority_code = "32630"
 
 # Expected chunk/block size [x, y]. Omit to skip the check.
-block_size = [244, 244]
+# T30VVK dataset: r10m band uses 915x915 chunks.
+block_size = [915, 915]
 
 # Minimum number of overview levels expected.
 min_overview_count = 3
 
 # Upper bound on network bytes for a single-chunk partial read.
-partial_read_max_kb = 1024
+# T30VVK dataset: r10m band has 915x915 Float32 chunks (~3.35 MB uncompressed).
+# Budget set to 4096 KB; the subcheck reports the real figure.
+partial_read_max_kb = 4096
+
+# Maximum HTTP HEAD requests allowed during a gdalinfo call (consolidated metadata check).
+consolidated_head_max = 50
 
 # RGB bands for the true-colour composite (Task 5). Remove this section to skip the test.
 [rgb_composite]

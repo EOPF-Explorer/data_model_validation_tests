@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from helpers import (
-    TestResult,
+    TaskResult,
     band_statistics,
     make_zarr_url,
     png_max_pixel_value,
@@ -33,15 +33,6 @@ def test_composite(dataset_url, dataset_config, output_dir, report, gdal_version
     #   - If actual max ≈ 65535 → data has outliers; auto-scale is "correct" but useless
     #   - If actual max is a reasonable value yet auto-scale still produces black → GDAL bug
     src_stats = band_statistics(url_r)
-
-    # Also run the broken auto-scale command for direct comparison in the report
-    autoscale_png = str(output_dir / "images" / "rgb_composite_autoscale_diagnostic.png")
-    run_gdal_translate(
-        vrt_file if Path(vrt_file).exists() else url_r,
-        autoscale_png,
-        extra_args=["-of", "PNG", "-scale", "-outsize", "10%", "10%"],
-    )
-    autoscale_max = png_max_pixel_value(autoscale_png)
 
     # Build VRT with separate bands
     vrt = run_gdalbuildvrt(vrt_file, [url_r, url_g, url_b], extra_args=["-separate"])
@@ -74,31 +65,31 @@ def test_composite(dataset_url, dataset_config, output_dir, report, gdal_version
         if isinstance(src_max, float) and src_max > 10000:
             scale_note = (
                 f"Source band actual range: min={src_min:.0f} max={src_max:.0f} "
-                f"mean={src_mean:.0f} — outlier values (e.g. clouds/saturation near 65535) "
-                f"cause `-scale` without bounds to map typical land pixels to near-black "
-                f"(auto-scale max pixel={autoscale_max:.0f}/255). "
-                f"This is expected GDAL behaviour, not a GDAL bug; use explicit bounds."
+                f"mean={src_mean:.0f} — very high max DN (e.g. clouds/saturation) widens "
+                f"the min–max stretch; bare `-scale` maps typical reflectance near-black. "
+                f"Explicit vis_scale avoids that."
             )
         else:
-            if autoscale_max is not None and autoscale_max < 5:
-                scale_note = (
-                    f"Source band actual range: min={src_min:.0f} max={src_max:.0f} "
-                    f"mean={src_mean:.0f} — range looks reasonable yet auto-scale produced "
-                    f"a black image (max pixel={autoscale_max:.0f}/255). "
-                    f"This may indicate a GDAL auto-scale bug; consider filing at "
-                    f"https://github.com/OSGeo/gdal/issues"
-                )
-            else:
-                scale_note = (
-                    f"Source band actual range: min={src_min:.0f} max={src_max:.0f} "
-                    f"mean={src_mean:.0f}; auto-scale max pixel={autoscale_max}/255."
-                )
+            scale_note = (
+                f"Source band actual range: min={src_min:.0f} max={src_max:.0f} "
+                f"mean={src_mean:.0f}; thumbnail uses explicit vis_scale."
+            )
     else:
         scale_note = "Source band statistics not available."
 
     duration = time.monotonic() - start
     size_kb = png.stat().st_size // 1024
-    report.add(TestResult(
+
+    def ck(flag: bool) -> str:
+        return "x" if flag else " "
+
+    visual_ok = max_val is not None and max_val > 5
+    subchecks = [
+        "[x] Multi-band VRT composite (B04-B03-B02) built successfully",
+        f"[{ck(visual_ok)}] Result visually meaningful: max pixel={max_val:.0f}/255 (expect > 5); size={size_kb} KB",
+    ]
+
+    report.add(TaskResult(
         name="5. RGB Composite",
         passed=True,
         duration=duration,
@@ -106,13 +97,9 @@ def test_composite(dataset_url, dataset_config, output_dir, report, gdal_version
             f"RGB PNG written ({size_kb} KB, max pixel={max_val:.0f}/255): {png.name}. "
             f"{scale_note}"
         ),
+        subchecks=subchecks,
         artifacts=[png_file],
         cli_commands=[
-            f"# Diagnostic: auto-scale (bare -scale) — may produce black image\n"
-            f"gdal_translate -of PNG -scale -outsize 10% 10% \\\n"
-            f"  rgb.vrt rgb_composite_autoscale_diagnostic.png -q\n"
-            f"\n"
-            f"# Correct: explicit bounds from vis_scale config\n"
             f"gdalbuildvrt -separate rgb.vrt \\\n"
             f"  '{url_r}' \\\n"
             f"  '{url_g}' \\\n"

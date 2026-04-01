@@ -9,4 +9,5 @@ dist/
 
 output/*.tif
 output/images/*.xml
+output/*.xml
 output/*.vrt

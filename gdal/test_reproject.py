@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from helpers import (
-    TestResult,
+    TaskResult,
     band_statistics,
     make_zarr_url,
     png_max_pixel_value,
@@ -37,17 +37,9 @@ def test_reproject(dataset_url, dataset_config, output_dir, report, gdal_version
     # Using the reprojected TIF (same data, already local) is faster than
     # re-fetching from the remote Zarr URL.
     src_stats = band_statistics(out_file)
-
-    # Run the broken auto-scale command for direct comparison in the report
     scale_min, scale_max = cfg.vis_scale
-    autoscale_png = str(output_dir / "images" / "b02_4326_autoscale_diagnostic.png")
-    run_gdal_translate(
-        out_file, autoscale_png,
-        extra_args=["-of", "PNG", "-scale", "-outsize", "10%", "10%"],
-    )
-    autoscale_max = png_max_pixel_value(autoscale_png)
 
-    # Correct thumbnail with explicit bounds
+    # Thumbnail with explicit bounds
     png_file = str(output_dir / "images" / "b02_4326.png")
     run_gdal_translate(
         out_file, png_file,
@@ -70,32 +62,32 @@ def test_reproject(dataset_url, dataset_config, output_dir, report, gdal_version
         if isinstance(src_max, float) and src_max > 10000:
             scale_note = (
                 f"Source band actual range: min={src_min:.0f} max={src_max:.0f} "
-                f"mean={src_mean:.0f} — outlier values (e.g. clouds/saturation near 65535) "
-                f"cause `-scale` without bounds to map typical land pixels to near-black "
-                f"(auto-scale max pixel={autoscale_max:.0f}/255). "
-                f"This is expected GDAL behaviour, not a GDAL bug; use explicit bounds."
+                f"mean={src_mean:.0f} — very high max DN (e.g. clouds/saturation) widens "
+                f"the min–max stretch; bare `-scale` maps typical reflectance near-black. "
+                f"Explicit vis_scale avoids that."
             )
         else:
-            if autoscale_max is not None and autoscale_max < 5:
-                scale_note = (
-                    f"Source band actual range: min={src_min:.0f} max={src_max:.0f} "
-                    f"mean={src_mean:.0f} — range looks reasonable yet auto-scale produced "
-                    f"a black image (max pixel={autoscale_max:.0f}/255). "
-                    f"This may indicate a GDAL auto-scale bug; consider filing at "
-                    f"https://github.com/OSGeo/gdal/issues"
-                )
-            else:
-                scale_note = (
-                    f"Source band actual range: min={src_min:.0f} max={src_max:.0f} "
-                    f"mean={src_mean:.0f}; auto-scale max pixel={autoscale_max}/255."
-                )
+            scale_note = (
+                f"Source band actual range: min={src_min:.0f} max={src_max:.0f} "
+                f"mean={src_mean:.0f}; thumbnail uses explicit vis_scale."
+            )
     else:
         scale_note = "Source band statistics not available."
 
     duration = time.monotonic() - start
     artifacts = [png_file] if Path(png_file).exists() else []
     thumbnail_note = f", thumbnail max pixel={max_val:.0f}/255" if max_val is not None else ""
-    report.add(TestResult(
+
+    def ck(flag: bool) -> str:
+        return "x" if flag else " "
+
+    visual_ok = max_val is not None and max_val > 5
+    subchecks = [
+        "[x] Output correctly georeferenced: EPSG:4326",
+        f"[{ck(visual_ok)}] Visually appealing result: thumbnail max pixel={max_val:.0f}/255 (expect > 5)" if max_val is not None else "[ ] Visually appealing result: thumbnail not generated",
+    ]
+
+    report.add(TaskResult(
         name="4. Reproject -> EPSG:4326",
         passed=True,
         duration=duration,
@@ -103,14 +95,10 @@ def test_reproject(dataset_url, dataset_config, output_dir, report, gdal_version
             f"Reprojected to EPSG:4326, output={Path(out_file).name}{thumbnail_note}. "
             f"{scale_note}"
         ),
+        subchecks=subchecks,
         artifacts=artifacts,
         cli_commands=[
             f"gdalwarp -t_srs EPSG:4326 '{url}' b02_4326.tif -q",
-            f"# Diagnostic: auto-scale (bare -scale) — may produce black image\n"
-            f"gdal_translate -of PNG -scale -outsize 10% 10% \\\n"
-            f"  b02_4326.tif b02_4326_autoscale_diagnostic.png -q\n"
-            f"\n"
-            f"# Correct: explicit bounds from vis_scale config\n"
             f"gdal_translate -of PNG -scale {scale_min} {scale_max} 0 255 -outsize 10% 10% b02_4326.tif b02_4326.png -q",
         ],
         output_snippet=info.stdout,
