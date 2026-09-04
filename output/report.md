@@ -1,6 +1,6 @@
 # EOPF / GeoZarr Validation Report
 
-> **10/10 tasks passed** &nbsp;·&nbsp; Generated: 2026-09-04T14:53:35Z
+> **10/10 tasks passed** &nbsp;·&nbsp; Generated: 2026-09-04T15:52:45Z
 
 ## 1. Environment
 
@@ -11,43 +11,45 @@
 | Python version | `3.12.3` |
 | Platform | `Linux-6.12.54-linuxkit-aarch64-with-glibc2.39` |
 | Dataset URL | `https://s3.explorer.eopf.copernicus.eu/esa-zarr-sentinel-explorer-fra/tests-output/sentinel-2-l2a/S2C_MSIL2A_20260903T135731_N0512_R010_T26WME_20260903T171314.zarr` |
-| Date | `2026-09-04T14:53:35Z` |
+| Date | `2026-09-04T15:52:45Z` |
 
 ## 2. Test Results
 
 | Task | Status | Duration | Network | Details |
 |------|--------|----------|---------|---------|
-| 1. Metadata | ✅ PASS | 1.25s | — | CRS=EPSG:32626 pixel=10m overviews=5>=3 block=244x244 scale=False nodata=True HEAD=8 |
-| 2. Partial Read | ✅ PASS | 1.13s | 514 KB | 244x244 window (1 shard): 514 KB (< 2048 KB limit) |
-| 3. Export -> GeoTIFF | ✅ PASS | 22.63s | — | Exported to band.tif, CRS=EPSG:32626 verified, origin=399965, pixel=10m, max=1.7853000164032 |
-| 4. Reproject -> EPSG:4326 | ✅ PASS | 21.61s | — | Reprojected to EPSG:4326, output=b02_4326.tif, thumbnail max pixel=255/255. Source band actual range: min=-0 max=2 mean=1; thumbnail uses explicit vis_scale. |
-| 5. RGB Composite | ✅ PASS | 299.74s | — | RGB PNG written (694 KB, max pixel=255/255): rgb_composite.png. Source band actual range: min=-0 max=2 mean=1; thumbnail uses explicit vis_scale. |
-| 6. Overview Read | ✅ PASS | 16.46s | 87291 KB | 5 overview levels; overview=5490x5490 (full=10980x10980); file=117767 KB (full=471004 KB); network=87291 KB |
-| 7. Resolution r10m | ✅ PASS | 1.07s | — | r10m=10m (expected 10m) |
-| 7. Resolution r20m | ✅ PASS | 1.05s | — | r20m=20m (expected 20m) |
-| 7. Resolution r60m | ✅ PASS | 1.74s | — | r60m=60m (expected 60m) |
-| 8. GeoZarr Conventions | ✅ PASS | 3.05s | — | driver=Zarr CRS=present GeoTransform=non-default proj_ext=True gridmap=True |
+| 1. Metadata | ✅ PASS | 3.63s | — | CRS=EPSG:32626 pixel=10m overviews=5>=3 block=244x244 scale=True nodata=True HEAD=8 |
+| 2. Partial Read | ✅ PASS | 1.82s | 514 KB | 244x244 window (1 shard): 514 KB (< 2048 KB limit) |
+| 3. Export -> GeoTIFF | ✅ PASS | 23.50s | — | Exported to band.tif, CRS=EPSG:32626 verified, origin=399965, pixel=10m, max=1.7853000164032 |
+| 4. Reproject -> EPSG:4326 | ✅ PASS | 23.33s | — | Reprojected to EPSG:4326, output=b02_4326.tif, thumbnail max pixel=255/255. Source band actual range: min=-0 max=2 mean=1; thumbnail uses explicit vis_scale. |
+| 5. RGB Composite | ✅ PASS | 345.53s | — | RGB PNG written (694 KB, max pixel=255/255): rgb_composite.png. Source band actual range: min=-0 max=2 mean=1; thumbnail uses explicit vis_scale. |
+| 6. Overview Read | ✅ PASS | 21.46s | 87291 KB | 5 overview levels; overview=5490x5490 (full=10980x10980); file=117767 KB (full=471004 KB); network=87291 KB |
+| 7. Resolution r10m | ✅ PASS | 1.50s | — | r10m=10m (expected 10m) |
+| 7. Resolution r20m | ✅ PASS | 2.71s | — | r20m=20m (expected 20m) |
+| 7. Resolution r60m | ✅ PASS | 2.39s | — | r60m=60m (expected 60m) |
+| 8. GeoZarr Conventions | ✅ PASS | 3.15s | — | driver=Zarr CRS=present GeoTransform=non-default proj_ext=True gridmap=True |
 
 ### 1. Metadata
 
-**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 1.25s
+**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 3.63s
 
 - [x] CRS decoded: WGS 84 / UTM zone 26N, EPSG:32626
 - [x] GeoTransform / pixel size: 10.0m (r10m band, expect ~10m)
 - [x] Overviews listed: 5 levels (expect ≥3)
 - [x] Block/chunk size: 244×244
-- [ ] Band metadata — Scale: not found
-- [ ] Band metadata — Offset: not found
+- [x] Band metadata — Scale: 0.001 (probed on /quality/atmosphere/r10m/aot)
+- [x] Band metadata — Offset: 0 (probed on /quality/atmosphere/r10m/aot)
 - [x] Band metadata — NoData/fill value: nan
 - [x] Band metadata — units: Type:
 - [x] Consolidated metadata: 8 HEAD requests (threshold < 50)
 
-CRS=EPSG:32626 pixel=10m overviews=5>=3 block=244x244 scale=False nodata=True HEAD=8
+CRS=EPSG:32626 pixel=10m overviews=5>=3 block=244x244 scale=True nodata=True HEAD=8
 
 **Reference CLI commands** (copy-paste to replicate):
 
 ```bash
 CPL_VSIL_SHOW_NETWORK_STATS=YES gdalinfo 'ZARR:"/vsicurl/https://s3.explorer.eopf.copernicus.eu/esa-zarr-sentinel-explorer-fra/tests-output/sentinel-2-l2a/S2C_MSIL2A_20260903T135731_N0512_R010_T26WME_20260903T171314.zarr":/measurements/reflectance/r10m/b02'
+# Scale/Offset decoding (CF scale_factor/add_offset on a scaled integer band)
+gdalinfo 'ZARR:"/vsicurl/https://s3.explorer.eopf.copernicus.eu/esa-zarr-sentinel-explorer-fra/tests-output/sentinel-2-l2a/S2C_MSIL2A_20260903T135731_N0512_R010_T26WME_20260903T171314.zarr":/quality/atmosphere/r10m/aot'
 ```
 
 <details>
@@ -80,7 +82,7 @@ PROJCRS["WGS 84 / UTM zone 26N",
 
 ### 2. Partial Read
 
-**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 1.13s
+**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 1.82s
 
 - [x] Only relevant shard fetched: 244×244 window = 1 chunk (shard-aligned read)
 - [x] Network download < 2048 KB: 514 KB transferred
@@ -125,7 +127,7 @@ Network statistics:
 
 ### 3. Export -> GeoTIFF
 
-**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 22.63s
+**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 23.50s
 
 - [x] CRS preserved: EPSG:32626
 - [x] Extent / origin preserved: origin_x=399965.0, pixel_size=10m
@@ -170,7 +172,7 @@ PROJCRS["WGS 84 / UTM zone 26N",
 
 ### 4. Reproject -> EPSG:4326
 
-**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 21.61s
+**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 23.33s
 
 - [x] Output correctly georeferenced: EPSG:4326
 - [x] Visually appealing result: thumbnail max pixel=255/255 (expect > 5)
@@ -190,6 +192,7 @@ gdal_translate -of PNG -scale 0.0 0.3 0 255 -outsize 10% 10% b02_4326.tif b02_43
 ```
 Driver: GTiff/GeoTIFF
 Files: output/b02_4326.tif
+       output/b02_4326.tif.aux.xml
 Size is 14930, 4691
 Coordinate System is:
 GEOGCRS["WGS 84",
@@ -207,14 +210,13 @@ GEOGCRS["WGS 84",
         ENSEMBLEACCURACY[2.0]],
     PRIMEM["Greenwich",0,
         ANGLEUNIT["degree",0.0174532925199433]],
-    CS[ellipsoidal,2],
 ...
 ```
 </details>
 
 ### 5. RGB Composite
 
-**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 299.74s
+**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 345.53s
 
 - [x] Multi-band VRT composite (B04-B03-B02) built successfully
 - [x] Result visually meaningful: max pixel=255/255 (expect > 5); size=694 KB
@@ -242,7 +244,7 @@ gdal_translate -of PNG -scale 0.0 0.3 0 255 -outsize 10% 10% rgb.vrt rgb_composi
 
 ### 6. Overview Read
 
-**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 16.46s
+**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 21.46s
 
 - [x] Overview returns lower-resolution data: 5490×5490 vs full-res 10980×10980
 - [x] Overview access is efficient: 117767 KB vs full-res 471004 KB
@@ -287,7 +289,7 @@ PROJCRS["WGS 84 / UTM zone 26N",
 
 ### 7. Resolution r10m
 
-**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 1.07s
+**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 1.50s
 
 - [x] r10m band: pixel size=10m (expect 10m)
 
@@ -329,7 +331,7 @@ PROJCRS["WGS 84 / UTM zone 26N",
 
 ### 7. Resolution r20m
 
-**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 1.05s
+**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 2.71s
 
 - [x] r20m band: pixel size=20m (expect 20m)
 
@@ -371,7 +373,7 @@ PROJCRS["WGS 84 / UTM zone 26N",
 
 ### 7. Resolution r60m
 
-**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 1.74s
+**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 2.39s
 
 - [x] r60m band: pixel size=60m (expect 60m)
 
@@ -413,7 +415,7 @@ PROJCRS["WGS 84 / UTM zone 26N",
 
 ### 8. GeoZarr Conventions
 
-**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 3.05s
+**Status:** ✅ PASS &nbsp;·&nbsp; **Duration:** 3.15s
 
 - [x] spatial/proj extensions recognized: crs_wkt/_CRS/spatial_ref/proj: keys in metadata
 - [x] Grid mapping / CRS via Zarr conventions: grid_mapping or ZARR domain present
@@ -503,7 +505,7 @@ All **10 contracted validation tasks** passed successfully against https://s3.ex
 
 The following capabilities are confirmed working:
 
-- **1. Metadata**: CRS=EPSG:32626 pixel=10m overviews=5>=3 block=244x244 scale=False nodata=True HEAD=8
+- **1. Metadata**: CRS=EPSG:32626 pixel=10m overviews=5>=3 block=244x244 scale=True nodata=True HEAD=8
 - **2. Partial Read**: 244x244 window (1 shard): 514 KB (< 2048 KB limit)
 - **3. Export -> GeoTIFF**: Exported to band.tif, CRS=EPSG:32626 verified, origin=399965, pixel=10m, max=1.7853000164032
 - **4. Reproject -> EPSG:4326**: Reprojected to EPSG:4326, output=b02_4326.tif, thumbnail max pixel=255/255. Source band actual range: min=-0 max=2 mean=1; thumbnail uses explicit vis_scale.

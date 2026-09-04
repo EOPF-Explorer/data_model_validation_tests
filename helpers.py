@@ -178,6 +178,14 @@ class ResolutionBand:
 
 
 @dataclass
+class ScaleOffsetBand:
+    """A band expected to expose CF scale_factor/add_offset as GDAL Scale/Offset."""
+    zarr_path: str
+    expected_scale: float | None = None
+    expected_offset: float | None = None
+
+
+@dataclass
 class DatasetConfig:
     name: str
     description: str
@@ -189,6 +197,7 @@ class DatasetConfig:
     consolidated_head_max: int
     rgb_composite: RGBComposite | None
     resolution_bands: list[ResolutionBand]
+    scale_offset_band: ScaleOffsetBand | None = None
     vis_scale: list[float] = field(default_factory=lambda: [0.0, 1.0])
 
 
@@ -212,6 +221,11 @@ def load_config(path: str | Path) -> DatasetConfig:
         resolution_bands=[
             ResolutionBand(**b) for b in raw.get("resolution_bands", [])
         ],
+        scale_offset_band=(
+            ScaleOffsetBand(**raw["scale_offset_band"])
+            if raw.get("scale_offset_band")
+            else None
+        ),
         vis_scale=dataset.get("vis_scale", [0, 65535]),
     )
 
