@@ -1,4 +1,4 @@
-.PHONY: test test-docker test-local test-v3 docker-build clean help
+.PHONY: test test-docker test-local test-v3 repro-codec docker-build clean help
 
 IMAGE_NAME    := eopf-validation-gdal
 EOPF_DATASET_URL ?= https://s3.explorer.eopf.copernicus.eu/esa-zarr-sentinel-explorer-fra/tests-output/sentinel-2-l2a/S2B_MSIL2A_20260320T114349_N0512_R123_T30VVK_20260320T155447.zarr
@@ -29,6 +29,10 @@ test-v3:
 		$(GDAL_PERF_ENV) \
 		-v "$(PWD)/output:/workspace/output" \
 		$(IMAGE_NAME) pytest -v
+
+## Reproduce GDAL's failure on the Zarr v3 scale_offset/cast_value codecs (needs only Docker)
+repro-codec:
+	./scripts/repro-codec.sh
 
 ## Run pytest suite locally (requires GDAL CLI + Python ≥ 3.11 + pytest)
 test-local:

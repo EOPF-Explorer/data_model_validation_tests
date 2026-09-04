@@ -67,6 +67,45 @@ Results:
 
 The CLI commands in Section 2 use the actual dataset URL and band paths, so any reader can copy-paste and replicate a test independently without running pytest.
 
+## Reproducing the GDAL scale-offset codec failure
+
+GDAL cannot read Zarr v3 arrays that use the `scale_offset` or `cast_value` codecs — the
+standard zarr-python (>= 3.2) way of expressing the CF `scale_factor`/`add_offset`
+convention. This is what blocks the `gdal` checkbox in
+[EOPF-Explorer/data-pipeline#181](https://github.com/EOPF-Explorer/data-pipeline/issues/181).
+
+`fixtures/codec_scale_offset.zarr` is a 28 KB committed store whose codec chain is
+byte-identical to what the EOPF converter emits for Sentinel-2 reflectance. Reproducing
+needs nothing but Docker:
+
+```bash
+make repro-codec
+
+# or test a specific GDAL build
+GDAL_IMAGE=ghcr.io/osgeo/gdal:ubuntu-full-3.11.0 ./scripts/repro-codec.sh
+```
+
+Expected output today (GDAL 3.13.0dev and 3.14.0dev both fail):
+
+```
+  /b02_plain
+ERROR 6: Unsupported codec: scale_offset
+gdalinfo exit code = 1
+
+  /b02_sharded
+ERROR 6: Unsupported codec: scale_offset
+ERROR 1: Codec sharding_indexed: initialization of codecs failed
+gdalinfo exit code = 1
+```
+
+The array does not merely lose its scale/offset metadata — it does not open at all, and the
+failure cascades through `sharding_indexed`, so a whole production reflectance group becomes
+unreadable. The script exits non-zero while unsupported and zero once GDAL gains support, so
+it doubles as a regression check.
+
+Regenerate the fixture with `python scripts/make_codec_fixture.py fixtures/codec_scale_offset.zarr`
+(requires `zarr[cast-value-rs]>=3.2.0`).
+
 ## Configuration
 
 Reads `configs/sentinel2_l2a.toml` by default. Override with `EOPF_DATASET_CONFIG`:
