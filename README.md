@@ -39,6 +39,10 @@ make docker-build
 # In Docker — uses the default dataset URL already set in the Makefile
 make test
 
+# New Zarr v3 (sharded) datamodel — uses configs/sentinel2_l2a_v3.toml and
+# enables GDAL threading (required: full-band reads are very slow single-threaded)
+make test-v3
+
 # Override the dataset URL if needed
 EOPF_DATASET_URL=https://host/path/S2A_MSIL2A_....zarr make test
 
@@ -101,7 +105,8 @@ validation_tests/
 
 ```
 make docker-build    Build the Docker image
-make test            Run pytest in Docker
+make test            Run pytest in Docker (default v2 dataset)
+make test-v3         Run pytest against the Zarr v3 (sharded) datamodel, with GDAL threading
 make test-local      Run pytest locally
 make clean           Remove output/
 ```
