@@ -93,6 +93,9 @@ def test_rg07_warns_when_the_item_keeps_its_source_items_time(server, tmp_path):
     # a source with another time doesn't explain the item's: still stale
     state.item = {"properties": {"created": "2026-07-28T15:00:00Z", "updated": "2026-07-28T15:00:00Z"}}
     assert rg.rg07_fresh(item, StoreReader(store, Budget(5)), Http(Budget(5))).status == FAIL
+    # a source whose JSON isn't an object (review): still stale, no crash
+    state.item = ["not", "an", "item"]
+    assert rg.rg07_fresh(item, StoreReader(store, Budget(5)), Http(Budget(5))).status == FAIL
 
 def test_rg08_matches_the_s3_origin_against_gateway_hrefs():
     """D8 says pass the s3:// origin; the item's hrefs are gateway https URLs. Same store."""
@@ -101,3 +104,22 @@ def test_rg08_matches_the_s3_origin_against_gateway_hrefs():
     origin = "s3://esa-zarr-sentinel-explorer-fra/tests-output/c/I.zarr"
     assert rg.rg08_hrefs(item, origin, CFG_RG).status == PASS
     assert rg.rg08_hrefs(item, origin.replace("I.zarr", "OTHER.zarr"), CFG_RG).status == FAIL
+
+
+def test_rg07_survives_a_naive_time_and_a_source_that_is_not_json(server, tmp_path):
+    """Review: a time without an offset raised TypeError; a 200 HTML source raised ValueError."""
+    state, base = server
+    store = build(tmp_path / "s.zarr")
+    item = item_for(base, store, "2026-07-28T15:40:15")  # no offset: read as UTC
+    item["links"].append({"rel": "derived_from", "href": f"{base}/src/map.html"})  # 200 text/html
+    res = rg.rg07_fresh(item, StoreReader(store, Budget(5)), Http(Budget(5)))
+    assert res.status == FAIL and any("JSONDecodeError" in e for e in res.evidence), res.evidence
+
+
+def test_link_zoom_falls_back_when_the_tilejson_has_no_zooms(server):
+    """Review: zooms = [None, None] is truthy, so `None + None` crashed RG04."""
+    state, base = server
+    state.item = {"tilejson": "3.0.0"}  # served as JSON by the fake STAC route
+    footprint = {"type": "Polygon", "coordinates": [[[-36, 34], [-34, 34], [-34, 36], [-36, 36], [-36, 34]]]}
+    z, _ = rg._zoom_and_tile(Http(Budget(5)), {"tilejson": f"{base}/stac/collections/tj"}, footprint, {}, "I")
+    assert z == 8

@@ -39,4 +39,4 @@ def tr01_local_reader(store_url: str, cfg: dict, center=None) -> Result:
                         fails.append(f"{group}: tile z{z} {x}/{y} is empty")
         except Exception as exc:  # report, never hide: this is the error titiler would 500 on
             fails.append(f"{group}: {type(exc).__name__}: {str(exc)[:200]}")
-    return Result("TR01", "reader", FAIL if fails else PASS, fails[0] if fails else "titiler-eopf 0.12 reader opens the store and renders tiles", fails + rows, metrics)
+    return Result("TR01", "reader", FAIL if fails else PASS, fails[0] if fails else "titiler-eopf 0.12 reader opens the store and renders tiles", fails + rows, metrics, problems=fails)

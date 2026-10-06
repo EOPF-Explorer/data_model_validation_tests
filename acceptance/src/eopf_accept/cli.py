@@ -14,13 +14,14 @@ import argparse
 import datetime as dt
 import sys
 import tomllib
+import traceback
 from pathlib import Path
 from urllib.parse import urlparse
 
 from . import registration as rg
 from . import report
 from .budget import Budget, BudgetExceeded, Http
-from .model import FAIL, Result, apply_known_issues
+from .model import FAIL, VOID, Result, apply_known_issues
 from .store_checks import CHECKS, REQUEST_BOUNDS, StoreContext
 from .storeio import StoreReader
 from .titiler_checks import TitilerBattery, urls
@@ -28,6 +29,7 @@ from .titiler_checks import TitilerBattery, urls
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs"
 DEFAULT_OUT = Path.home() / "DevDS" / "EOPF" / "acceptance_runs"
 PRODUCTION_HOSTS = {"api.explorer.eopf.copernicus.eu", "s3.explorer.eopf.copernicus.eu"}
+PRODUCTION_BUCKETS = {"esa-zarr-sentinel-explorer-fra"}  # the registered stores, in any URL form
 GROUPS = ("store", "reader", "titiler", "registration")
 GATEWAY_NOTE = ("Read path: the S3 gateway caches objects for up to 1 h and ignores query strings, so a store "
                 "rewritten less than an hour ago may be read as its previous version. Prefer the s3:// origin.")
@@ -91,6 +93,8 @@ def guard_stage(args, endpoints: dict) -> None:
     hosts = {urlparse(e["base"]).hostname for e in endpoints.values()} | {urlparse(args.store).hostname}
     if hosts & PRODUCTION_HOSTS:
         raise SystemExit(f"--stage scratch refuses production hosts {sorted(hosts & PRODUCTION_HOSTS)}")
+    if bucket := next((b for b in PRODUCTION_BUCKETS if b in args.store), None):
+        raise SystemExit(f"--stage scratch refuses the production bucket {bucket}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -121,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
         budget.reserve("registration", rg.REQUEST_BOUND)
     if "titiler" in groups:
         for name, ep in endpoints.items():
-            budget.reserve(f"titiler:{name}", 10 + len([c for c in cfg.get("contract", []) if c["api"] == ep["api"]]))
+            budget.reserve(f"titiler:{name}", TitilerBattery.request_bound(cfg, ep["api"]))
 
     if args.cmd == "plan":
         print(f"config: {cfg['_config_path']}")
@@ -174,6 +178,9 @@ def main(argv: list[str] | None = None) -> int:
                 results += TitilerBattery(http, name, ep, cfg, args.item, center, footprint).run()
     except BudgetExceeded as exc:
         results.append(Result("BUDGET", "run", FAIL, f"stopped: {exc}"))
+    except Exception as exc:  # keep the partial results; a crash is no verdict
+        results.append(Result("CRASH", "run", VOID, f"stopped by {type(exc).__name__}: {exc}; no verdict, fix and re-run",
+                              traceback.format_exc().splitlines()[-12:]))
     finally:
         http.close()
 

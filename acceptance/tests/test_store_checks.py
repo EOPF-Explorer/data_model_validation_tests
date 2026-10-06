@@ -6,7 +6,7 @@ import datetime as dt
 import pytest
 
 from eopf_accept.budget import Budget
-from eopf_accept.model import FAIL, KNOWN, PASS, WARN, apply_known_issues
+from eopf_accept.model import FAIL, KNOWN, PASS, WARN, Result, apply_known_issues
 from eopf_accept.store_checks import CHECKS, StoreContext
 from eopf_accept.storeio import StoreReader
 
@@ -77,6 +77,17 @@ def test_c4_undeclared_conventions_make_the_group_invisible(tmp_path):
     assert res["ST03"].status == FAIL  # no multiscales/spatial/proj declared
 
 
+def test_unconsolidated_levels_are_read_once(tmp_path):
+    """Review: without consolidated metadata, every check re-read each level's arrays."""
+    reader = StoreReader(build(tmp_path / "s.zarr", consolidated="none"), Budget(500))
+    ctx = StoreContext(reader, CFG)
+    g = ctx.ms_groups[0]
+    path = ctx.levels[g][0][1]
+    first = ctx.arrays(g, path)
+    used = reader.budget.used
+    assert first and ctx.arrays(g, path) == first and reader.budget.used == used
+
+
 def test_c7_float64_fails_st08_and_a_known_issue_downgrades_it(tmp_path):
     res = run(build(tmp_path / "s.zarr", dtype="float64"))
     assert res["ST08"].status == FAIL and "float64" in res["ST08"].summary
@@ -123,3 +134,12 @@ def test_store_reads_spend_the_budget(tmp_path):
 
     with pytest.raises(BudgetExceeded):
         run(build(tmp_path / "s.zarr"), budget=3)
+
+
+def test_a_known_issue_cannot_hide_a_second_failure():
+    """Review: ST08's summary is its first failure only; a new int64 failure in another group must stay visible."""
+    known = [{"check": "ST08", "match": "float64", "ref": "x", "until": "2026-12-31"}]
+    one = Result("ST08", "store", FAIL, "r0: dtype float64 not allowed", problems=["r0: dtype float64 not allowed"])
+    two = Result("ST08", "store", FAIL, "r0: dtype float64 not allowed", problems=["r0: dtype float64 not allowed", "r2: dtype int64 not allowed"])
+    apply_known_issues([one, two], known, dt.date(2026, 10, 6))
+    assert (one.status, two.status) == (KNOWN, FAIL)

@@ -111,8 +111,8 @@ class TitilerBattery:
             self.cache_headers.append(r.headers["x-cache"].upper())
         return r
 
-    def result(self, id_, status, summary, evidence=None, metrics=None):
-        return Result(id_, self.group, status, summary, evidence or [], metrics or {})
+    def result(self, id_, status, summary, evidence=None, metrics=None, problems=None):
+        return Result(id_, self.group, status, summary, evidence or [], metrics or {}, problems=problems or [])
 
     def ti00_version(self) -> Result:
         """Fail-closed: the reported version must equal the config AND the routes must match
@@ -134,7 +134,7 @@ class TitilerBattery:
         if fp != self.api:
             problems.append(f"routes look like the {fp} API, config says {self.api}")
         if problems:
-            return self.result("TI00", FAIL, "; ".join(problems))
+            return self.result("TI00", FAIL, "; ".join(problems), problems=problems)
         return self.result("TI00", PASS, f"reports {got}; routes match the {fp} API")
 
     def _prefix(self, n_bands=None):
@@ -166,7 +166,7 @@ class TitilerBattery:
             probs.append(f"zooms {lo}–{hi}, the item config expects {expect[0]}–{expect[1]}")
         if probs:
             return self.result("TI02", FAIL, "tilejson is incoherent: " + "; ".join(probs),
-                               [f"minzoom={lo!r} maxzoom={hi!r} bounds={b!r}", str(tj)[:300]])
+                               [f"minzoom={lo!r} maxzoom={hi!r} bounds={b!r}", str(tj)[:300]], problems=probs)
         self.tilejson = tj
         return self.result("TI02", PASS, f"tilejson → 200 with no zoom params; zooms {lo}–{hi}", metrics={"minzoom": lo, "maxzoom": hi, "bounds": b})
 
@@ -208,7 +208,7 @@ class TitilerBattery:
                 fails.append(f"z{z} {x}/{y}: {st['valid']:.0%} valid pixels (want > {want:.0%})")
             elif st["distinct"] < min_distinct:
                 fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values (a constant render?)")
-        return self.result("TI03", FAIL if fails else PASS, fails[0] if fails else f"tiles at z{', z'.join(map(str, zooms))} decode with real pixels", fails + rows, metrics)
+        return self.result("TI03", FAIL if fails else PASS, fails[0] if fails else f"tiles at z{', z'.join(map(str, zooms))} decode with real pixels", fails + rows, metrics, problems=fails)
 
     def ti04_rgb(self) -> Result:
         if not self.tilejson or len(self.cfg["render"]["variables"]) < 3:
@@ -282,5 +282,6 @@ class TitilerBattery:
         out = [v, self.ti01_info(), self.ti02_tilejson(), self.ti03_tiles(), self.ti04_rgb(), self.ti06_viewer(), self.ti07_contract(), self.ti09_fit_zoom()]
         return out + [self.ti05_cold()]
 
-    def request_bound(self) -> int:
-        return 10 + len([c for c in self.cfg.get("contract", []) if c["api"] == self.api])
+    @staticmethod
+    def request_bound(cfg: dict, api: str) -> int:
+        return 10 + len([c for c in cfg.get("contract", []) if c["api"] == api])

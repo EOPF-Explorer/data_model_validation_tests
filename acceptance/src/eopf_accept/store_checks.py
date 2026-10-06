@@ -80,19 +80,17 @@ class StoreContext:
         for g in self.ms_groups:
             layout = (_attrs(self.nodes[g]).get("multiscales") or {}).get("layout") or []
             self.levels[g] = [(e, f"{g}/{e.get('asset')}", reader.node(f"{g}/{e.get('asset')}")) for e in layout]
+        self._arrays: dict[str, dict[str, dict]] = {}
 
     def arrays(self, g: str, level_path: str) -> dict[str, dict]:
         """Data arrays of a level: from consolidated metadata, else the configured variables."""
-        rel = level_path[len(g) + 1:]
-        found = _data_arrays(rel, _consolidated(self.nodes[g]))
-        if found:
-            return found
-        out = {}
-        for v in self.cfg.get("sample_variables", []):
-            meta = self.reader.node(f"{level_path}/{v}")
-            if meta:
-                out[v] = meta
-        return out
+        if level_path not in self._arrays:  # six checks ask; read each zarr.json once
+            found = _data_arrays(level_path[len(g) + 1:], _consolidated(self.nodes[g]))
+            if not found:
+                metas = {v: self.reader.node(f"{level_path}/{v}") for v in self.cfg.get("sample_variables", [])}
+                found = {v: m for v, m in metas.items() if m}
+            self._arrays[level_path] = found
+        return self._arrays[level_path]
 
 
 def st01_consolidated(ctx: StoreContext) -> Result:
@@ -290,7 +288,7 @@ def st08_dtype_and_compression(ctx: StoreContext) -> Result:
             if meta["data_type"].startswith("float") and ratio < 1.2:
                 warns.append(f"{path}/{name}: {meta['data_type']} compresses only {ratio:.2f}x")
     status = FAIL if fails else WARN if warns else PASS
-    return Result("ST08", "store", status, fails[0] if fails else (warns[0] if warns else "dtypes allowed, compression OK"), fails + warns + rows)
+    return Result("ST08", "store", status, fails[0] if fails else (warns[0] if warns else "dtypes allowed, compression OK"), fails + warns + rows, problems=fails)
 
 
 def _is_empty(block: np.ndarray, fill) -> np.ndarray:
@@ -333,7 +331,7 @@ def st09_data_present(ctx: StoreContext) -> Result:
             if valid == 0:
                 fails.append(f"{levels[0][1]}/{name}: the finest level is empty where the coarsest level has data")
     return Result("ST09", "store", FAIL if fails else PASS if rows else SKIP,
-                  fails[0] if fails else ("data present at the finest and coarsest levels" if rows else "no sample_variables found"), fails + rows)
+                  fails[0] if fails else ("data present at the finest and coarsest levels" if rows else "no sample_variables found"), fails + rows, problems=fails)
 
 
 def ht02_open_without_listing(ctx: StoreContext) -> Result:
@@ -347,7 +345,7 @@ def ht02_open_without_listing(ctx: StoreContext) -> Result:
             fails.append(f"{g}: {exc}. Over HTTP this is a PROPFIND, which the gateway answers 405 (data-pipeline#446)")
         except FileNotFoundError as exc:
             fails.append(f"{g}: not found ({exc})")
-    return Result("HT02", "host", FAIL if fails else PASS, fails[0] if fails else "every opened group opens without listing", fails + rows)
+    return Result("HT02", "host", FAIL if fails else PASS, fails[0] if fails else "every opened group opens without listing", fails + rows, problems=fails)
 
 
 CHECKS = {

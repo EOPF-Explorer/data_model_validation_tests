@@ -28,9 +28,10 @@ def _parse_time(value) -> dt.datetime | None:
     if not value:
         return None
     try:
-        return dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        t = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
+    return t if t.tzinfo else t.replace(tzinfo=dt.UTC)  # STAC times are UTC; compare aware
 
 
 GATEWAY_HOSTS = ("s3.explorer.eopf.copernicus.eu", "s3.de.io.cloud.ovh.net")
@@ -66,7 +67,7 @@ def rg08_hrefs(item: dict, store: str, cfg: dict) -> Result:
             rows.append(f"asset {asset!r} → {href}")
     if not cfg.get("asset_group"):
         return Result("RG08", "registration", SKIP, "no asset_group in the config")
-    return Result("RG08", "registration", FAIL if fails else PASS, fails[0] if fails else "asset hrefs point at this store's groups", fails + rows)
+    return Result("RG08", "registration", FAIL if fails else PASS, fails[0] if fails else "asset hrefs point at this store's groups", fails + rows, problems=fails)
 
 
 def rg07_fresh(item: dict, reader: StoreReader, http: Http) -> Result:
@@ -91,10 +92,11 @@ def rg07_fresh(item: dict, reader: StoreReader, http: Http) -> Result:
     if source:
         try:
             r = http.get(source, bust=False)
-        except httpx.HTTPError as exc:
+            body = r.json() if r.status_code == 200 else {}
+            sp = (body.get("properties") if isinstance(body, dict) else None) or {}
+        except (httpx.HTTPError, ValueError) as exc:
             ev.append(f"source {source}: {type(exc).__name__}")
         else:
-            sp = r.json().get("properties", {}) if r.status_code == 200 else {}
             ev.append(f"source {source}: HTTP {r.status_code}, created {sp.get('created')}, updated {sp.get('updated')}")
             if item_t in {_parse_time(sp.get("created")), _parse_time(sp.get("updated"))}:
                 return Result("RG07", "registration", WARN, "the item's `updated` is copied from its source item (derived_from), so it can't date this registration; register_v1 doesn't stamp it", ev)
@@ -108,7 +110,7 @@ def _zoom_and_tile(http: Http, links: dict, footprint: dict, cfg: dict, item_id:
         if r.status_code == 200:
             tj = r.json()
             zooms = [tj.get("minzoom"), tj.get("maxzoom")]
-    lo, hi = zooms or (8, 8)
+    lo, hi = zooms if zooms and None not in zooms else (8, 8)
     z = (lo + hi + 1) // 2
     return z, lonlat_to_tile(*geo.interior_point(footprint), z)
 

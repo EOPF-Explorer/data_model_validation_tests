@@ -84,6 +84,38 @@ def test_scratch_stage_refuses_production_hosts():
                   "--stage", "scratch", "--endpoint", "rstaging"])
 
 
+@pytest.mark.parametrize("store", [
+    "s3://esa-zarr-sentinel-explorer-fra/tests-output/c/I.zarr",
+    "https://s3.de.io.cloud.ovh.net/esa-zarr-sentinel-explorer-fra/tests-output/c/I.zarr",
+    "https://esa-zarr-sentinel-explorer-fra.s3.de.io.cloud.ovh.net/tests-output/c/I.zarr",  # virtual-hosted
+    "https://s3.gra.io.cloud.ovh.net/esa-zarr-sentinel-explorer-fra/tests-output/c/I.zarr",  # another endpoint
+])
+def test_scratch_stage_refuses_the_production_bucket(store):
+    """Review: the guard compared hostnames only, and an s3:// URL's host is the bucket.
+    The scratch-only reader (TR01) reads outside the budget, so it must never get here."""
+    with pytest.raises(SystemExit, match="refuses the production bucket"):
+        cli.main(["plan", "--collection", "sentinel-3-olci-l1-efr-staging", "--store", store, "--stage", "scratch"])
+    cli.main(["plan", "--collection", "sentinel-3-olci-l1-efr-staging", "--stage", "scratch",
+              "--store", store.replace("explorer-fra", "explorer-tests")])
+
+
+def test_a_crash_still_writes_the_report_as_void(tmp_path, monkeypatch, capsys):
+    """Review: only BudgetExceeded was caught, so any other error lost every result and exited 1 like a FAIL."""
+    from .geozarr_fixture import build
+
+    store = build(tmp_path / "s.zarr")
+
+    def boom(*a, **k):
+        raise RuntimeError("store exploded")
+
+    monkeypatch.setattr(cli, "StoreContext", boom)
+    rc = cli.main(["run", "--collection", "sentinel-3-olci-l1-efr-staging", "--store", str(store), "--stage", "scratch",
+                   "--groups", "store", "--out", str(tmp_path / "runs")])
+    assert rc == 3
+    report_md = next((tmp_path / "runs").glob("*/report.md")).read_text()
+    assert "CRASH" in report_md and "store exploded" in report_md
+
+
 @pytest.mark.parametrize(
     "version, shard, inner, want",
     [

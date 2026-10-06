@@ -76,6 +76,12 @@ def test_zoom_mismatch_shows_the_zooms_and_a_known_issue_is_scoped_to_its_endpoi
     known = [{"check": "TI02", "group": "titiler:raster", "match": "zooms 5–9", "ref": "x", "until": "2026-12-31"}]
     apply_known_issues(results, known, dt.date(2026, 10, 6))
     assert [r.status for r in results] == [KNOWN, FAIL]
+    # a new problem reported next to the known one keeps the result a FAIL
+    state.bounds = [-36.0, 34.0, -36.0, 36.0]  # west == east
+    both = TitilerBattery(Http(Budget(100)), "raster", {"base": base, **RSTAGING}, cfg, ITEM).ti02_tilejson()
+    assert "bounds=" in both.summary and "zooms 5–9" in both.summary
+    apply_known_issues([both], known, dt.date(2026, 10, 6))
+    assert both.status == FAIL
 
 def test_c1_tilejson_500_fails_ti02(server):
     state, base = server
