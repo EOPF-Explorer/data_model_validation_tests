@@ -165,7 +165,8 @@ class TitilerBattery:
         if expect and [lo, hi] != list(expect):
             probs.append(f"zooms {lo}–{hi}, the item config expects {expect[0]}–{expect[1]}")
         if probs:
-            return self.result("TI02", FAIL, "tilejson is incoherent: " + "; ".join(probs), [str(tj)[:300]])
+            return self.result("TI02", FAIL, "tilejson is incoherent: " + "; ".join(probs),
+                               [f"minzoom={lo!r} maxzoom={hi!r} bounds={b!r}", str(tj)[:300]])
         self.tilejson = tj
         return self.result("TI02", PASS, f"tilejson → 200 with no zoom params; zooms {lo}–{hi}", metrics={"minzoom": lo, "maxzoom": hi, "bounds": b})
 

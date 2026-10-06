@@ -73,11 +73,26 @@ def test_c9_stale_registration_fails_rg07_and_rg08(server, tmp_path):
     store = build(tmp_path / "s.zarr")
     stale = item_for(base, store, "2026-10-01T00:00:00+00:00", href_group="measurements/r0")
     assert rg.rg08_hrefs(stale, store, CFG_RG).status == FAIL
-    assert rg.rg07_fresh(stale, StoreReader(store, Budget(5))).status == FAIL
+    assert rg.rg07_fresh(stale, StoreReader(store, Budget(5)), Http(Budget(5))).status == FAIL
     fresh = item_for(base, store, now_iso(5))
     assert rg.rg08_hrefs(fresh, store, CFG_RG).status == PASS
-    assert rg.rg07_fresh(fresh, StoreReader(store, Budget(5))).status == PASS
+    assert rg.rg07_fresh(fresh, StoreReader(store, Budget(5)), Http(Budget(5))).status == PASS
 
+
+def test_rg07_warns_when_the_item_keeps_its_source_items_time(server, tmp_path):
+    """6 Oct first prod run: register_v1 keeps the source item's `updated`, so an item
+    re-registered after its store looked stale. Its derived_from source has the same time."""
+    state, base = server
+    store = build(tmp_path / "s.zarr")
+    src_t = "2026-07-28T15:40:15.158141Z"
+    item = item_for(base, store, src_t)
+    item["links"].append({"rel": "derived_from", "href": f"{base}/stac/collections/src/items/I"})
+    state.item = {"properties": {"created": src_t, "updated": src_t}}
+    res = rg.rg07_fresh(item, StoreReader(store, Budget(5)), Http(Budget(5)))
+    assert res.status == WARN and "copied from its source" in res.summary, res.summary
+    # a source with another time doesn't explain the item's: still stale
+    state.item = {"properties": {"created": "2026-07-28T15:00:00Z", "updated": "2026-07-28T15:00:00Z"}}
+    assert rg.rg07_fresh(item, StoreReader(store, Budget(5)), Http(Budget(5))).status == FAIL
 
 def test_rg08_matches_the_s3_origin_against_gateway_hrefs():
     """D8 says pass the s3:// origin; the item's hrefs are gateway https URLs. Same store."""

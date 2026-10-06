@@ -30,7 +30,7 @@ rescale = ["10,300", "22,345", "36,390"]
 
 [endpoints]
 # `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs 0.12
-# code (sha-5fbea81) but reports 0.11.0: its pyproject predates the 0.12.0 bump. Confirm on the first run.
+# code (sha-5fbea81) but reports 0.11.0: its pyproject predates the 0.12.0 bump. Confirmed live 6 Oct.
 rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.11.0" }
 raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11", expect_version = "0.11.1" }
 
@@ -64,7 +64,7 @@ name = "registered tilejson link form, without the zoom workaround"
 path = "WebMercatorQuad/tilejson.json"
 params = [["variables", "/measurements/r0:oa08_radiance"], ["rescale", "10,300"], ["bidx", "1"]]
 expect = 200
-ref = "register_v1 _S3_OLCI_TILEJSON_ZOOM adds minzoom/maxzoom; is it still needed?"
+ref = "200, but zooms 9–9 on 0.11.1 (TI02, 6 Oct): register_v1 _S3_OLCI_TILEJSON_ZOOM is still needed until the flip"
 
 [[contract]]
 api = "0.12"
@@ -92,4 +92,11 @@ ref = "STAC viewer link"
 check = "ST08"
 match = "float64"
 ref = "OLCI radiance is stored as float64; data-model follow-up (uint16 + scale/offset, or float32)"
+until = "2026-12-31"
+
+[[known_issues]]
+check = "TI02"
+group = "titiler:raster"
+match = "zooms 9–9"
+ref = "titiler-eopf 0.11.1: tilejson without zoom params gives minzoom = maxzoom = 9 for OLCI; the registered links carry _S3_OLCI_TILEJSON_ZOOM until the /raster flip (6 Oct run)"
 until = "2026-12-31"

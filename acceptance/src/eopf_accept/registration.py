@@ -6,6 +6,8 @@ Registered stage only. Reads the item once from the STAC API, then its own links
 import datetime as dt
 from urllib.parse import urlsplit
 
+import httpx
+
 from . import geometry as geo
 from .budget import Http
 from .model import FAIL, PASS, SKIP, WARN, Result
@@ -13,7 +15,7 @@ from .storeio import StoreReader
 from .titiler_checks import lonlat_to_tile, png_stats
 
 LINK_RELS = ("viewer", "tilejson", "xyz")
-REQUEST_BOUND = 12  # item + 3 links + thumbnail, each once more for RG05, plus slack
+REQUEST_BOUND = 13  # item + 3 links + thumbnail, each once more for RG05, RG07's source item, plus slack
 
 
 def fetch_item(http: Http, stac: str, collection: str, item: str) -> dict:
@@ -67,9 +69,14 @@ def rg08_hrefs(item: dict, store: str, cfg: dict) -> Result:
     return Result("RG08", "registration", FAIL if fails else PASS, fails[0] if fails else "asset hrefs point at this store's groups", fails + rows)
 
 
-def rg07_fresh(item: dict, reader: StoreReader) -> Result:
+def rg07_fresh(item: dict, reader: StoreReader, http: Http) -> Result:
     """The item must be registered after the store was written: a failed registration
-    leaves an older item in place while the store is new (6 Oct canary run 1)."""
+    leaves an older item in place while the store is new (6 Oct canary run 1).
+
+    register_v1 (rc8) never stamps `created`/`updated`: the item keeps its source's, so
+    they date the source, not this registration (6 Oct first prod run). When the item's
+    time equals its `derived_from` source's, RG07 can't tell stale from fresh: WARN.
+    """
     props = item.get("properties", {})
     item_t = _parse_time(props.get("updated") or props.get("created"))
     meta = reader.head("zarr.json")
@@ -78,9 +85,20 @@ def rg07_fresh(item: dict, reader: StoreReader) -> Result:
         return Result("RG07", "registration", SKIP, f"no item updated/created ({item_t}) or store Last-Modified ({store_t})")
     lag = (item_t - store_t).total_seconds()
     ev = [f"item updated {item_t.isoformat()}", f"store root zarr.json Last-Modified {store_t.isoformat()}"]
-    if lag < -300:
-        return Result("RG07", "registration", FAIL, f"the item predates its store by {-lag / 60:.0f} min: this registration is stale", ev)
-    return Result("RG07", "registration", PASS, "the item was registered after the store was written", ev)
+    if lag >= -300:
+        return Result("RG07", "registration", PASS, "the item was registered after the store was written", ev)
+    source = next((link["href"] for link in item.get("links", []) if link.get("rel") == "derived_from"), None)
+    if source:
+        try:
+            r = http.get(source, bust=False)
+        except httpx.HTTPError as exc:
+            ev.append(f"source {source}: {type(exc).__name__}")
+        else:
+            sp = r.json().get("properties", {}) if r.status_code == 200 else {}
+            ev.append(f"source {source}: HTTP {r.status_code}, created {sp.get('created')}, updated {sp.get('updated')}")
+            if item_t in {_parse_time(sp.get("created")), _parse_time(sp.get("updated"))}:
+                return Result("RG07", "registration", WARN, "the item's `updated` is copied from its source item (derived_from), so it can't date this registration; register_v1 doesn't stamp it", ev)
+    return Result("RG07", "registration", FAIL, f"the item predates its store by {-lag / 60:.0f} min: this registration is stale", ev)
 
 
 def _zoom_and_tile(http: Http, links: dict, footprint: dict, cfg: dict, item_id: str):

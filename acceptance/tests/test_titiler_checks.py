@@ -1,9 +1,11 @@
 """The titiler battery against a fake server: each check fails when it should."""
 
+import datetime as dt
+
 import pytest
 
 from eopf_accept.budget import Budget, Http
-from eopf_accept.model import FAIL, PASS, VOID, WARN, XFAIL, XPASS
+from eopf_accept.model import FAIL, KNOWN, PASS, VOID, WARN, XFAIL, XPASS, apply_known_issues
 from eopf_accept.titiler_checks import TitilerBattery, fit_zoom, urls
 
 from .fake_titiler import State, serve
@@ -60,6 +62,20 @@ def test_version_guard_fingerprints_the_routes(server):
     res = battery(base).run()
     assert len(res) == 1 and res[0].status == FAIL and "routes look like the 0.11 API" in res[0].summary
 
+
+def test_zoom_mismatch_shows_the_zooms_and_a_known_issue_is_scoped_to_its_endpoint(server):
+    """6 Oct: /raster (0.11.1) gave zooms 9–9 without the zoom workaround; /rstaging gave 5–9.
+    A known issue for titiler:raster must not hide the same failure on another endpoint."""
+    state, base = server
+    cfg = {**CFG, "items": {ITEM: {"zooms": [4, 9]}}}  # the fake tilejson says 5–9
+    results = [
+        TitilerBattery(Http(Budget(100)), name, {"base": base, **RSTAGING}, cfg, ITEM).ti02_tilejson()
+        for name in ("raster", "rstaging")
+    ]
+    assert all(r.status == FAIL and "minzoom=5 maxzoom=9" in r.evidence[0] for r in results)
+    known = [{"check": "TI02", "group": "titiler:raster", "match": "zooms 5–9", "ref": "x", "until": "2026-12-31"}]
+    apply_known_issues(results, known, dt.date(2026, 10, 6))
+    assert [r.status for r in results] == [KNOWN, FAIL]
 
 def test_c1_tilejson_500_fails_ti02(server):
     state, base = server

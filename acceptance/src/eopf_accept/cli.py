@@ -167,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         if "registration" in groups:
             item = rg.fetch_item(http, cfg["stac"], args.collection, args.item)
             footprint = item.get("geometry")
-            results += [rg.rg08_hrefs(item, args.store, cfg), rg.rg07_fresh(item, reader)]
+            results += [rg.rg08_hrefs(item, args.store, cfg), rg.rg07_fresh(item, reader, http)]
             results += rg.rg04_rg05_links(http, item, cfg)
         if "titiler" in groups:
             for name, ep in endpoints.items():

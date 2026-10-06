@@ -27,14 +27,16 @@ class Result:
 def apply_known_issues(results: list[Result], known: list[dict], today: dt.date) -> None:
     """Turn a FAIL into KNOWN when a configured, unexpired known issue matches it.
 
-    A known issue matches on check id plus a substring of the summary or evidence. After
-    `until`, the same failure is a FAIL again, so an accepted issue cannot hide forever.
+    A known issue matches on check id (and group, e.g. `titiler:raster`, when it names one)
+    plus a substring of the summary or evidence. After `until`, the same failure is a FAIL
+    again, so an accepted issue cannot hide forever.
     """
     for r in results:
         if r.status != FAIL:
             continue
         text = " ".join([r.summary, *r.evidence])
         for k in known:
-            if k["check"] == r.id and k["match"] in text and today <= dt.date.fromisoformat(str(k["until"])):
+            if (k["check"] == r.id and k.get("group", r.group) == r.group and k["match"] in text
+                    and today <= dt.date.fromisoformat(str(k["until"]))):
                 r.status, r.known_issue = KNOWN, f"{k['ref']} (until {k['until']})"
                 break
