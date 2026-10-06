@@ -11,6 +11,8 @@ import re
 
 import numpy as np
 import zarr
+from geozarr_toolkit import Multiscales, Proj, Spatial
+from pydantic import ValidationError
 
 from . import conventions as cv
 from . import olpredict
@@ -217,6 +219,33 @@ def st11_declarations(ctx: StoreContext) -> Result:
     return Result("ST11", "store", status, f"{len(problems)} stale or misspelt convention declaration(s)", problems[:40] + ([f"... {len(problems) - 40} more"] if len(problems) > 40 else []))
 
 
+# Attribute contents only. geozarr-toolkit 0.1.2's own declaration constants (name
+# "spatial:", schema_url refs/tags/v1, a tag that doesn't exist) disagree with the
+# published v0.1 schemas (checked 6 Oct 2026), so declarations stay ST11's job.
+CONTENT_MODELS = {
+    cv.SPATIAL: Spatial.model_validate,
+    cv.PROJ: Proj.model_validate,
+    cv.MULTISCALES: lambda a: Multiscales.model_validate(a["multiscales"]),
+}
+
+
+def st12_convention_content(ctx: StoreContext) -> Result:
+    """Each node's spatial/proj/multiscales attributes against geozarr-toolkit's models,
+    the library behind inspect.geozarr.org. WARN while the toolkit is 0.1.x."""
+    problems = []
+    nodes = _all_nodes(ctx)
+    for path, node in nodes:
+        a = _attrs(node)
+        for u in sorted(cv.used(a)):
+            try:
+                CONTENT_MODELS[u](a)
+            except ValidationError as exc:
+                problems += [f"{path}: {cv.NAME[u]}: {'.'.join(map(str, e['loc'])) or 'attributes'}: {e['msg']}" for e in exc.errors()]
+    if not problems:
+        return Result("ST12", "store", PASS, f"{len(nodes)} nodes: spatial/proj/multiscales attributes valid (geozarr-toolkit)")
+    return Result("ST12", "store", WARN, f"{len(problems)} invalid convention attribute(s) (geozarr-toolkit)", problems[:40] + ([f"... {len(problems) - 40} more"] if len(problems) > 40 else []))
+
+
 def st07_chunk_layout(ctx: StoreContext) -> Result:
     consumers: dict = (ctx.cfg.get("consumers") or {}).get("openlayers") or {}
     fails, warns, rows = [], [], []
@@ -356,5 +385,6 @@ CHECKS = {
     "ST08": st08_dtype_and_compression,
     "ST09": st09_data_present,
     "ST11": st11_declarations,
+    "ST12": st12_convention_content,
     "HT02": ht02_open_without_listing,
 }

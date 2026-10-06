@@ -2,6 +2,7 @@
 
 import copy
 import datetime as dt
+import json
 
 import pytest
 
@@ -75,6 +76,23 @@ def test_c4_undeclared_conventions_make_the_group_invisible(tmp_path):
     assert res["ST04"].status == FAIL
     assert any("invisible to titiler-eopf" in e for e in res["ST04"].evidence)
     assert res["ST03"].status == FAIL  # no multiscales/spatial/proj declared
+
+
+def test_st12_flags_invalid_convention_contents(tmp_path):
+    """geozarr-toolkit's models catch what ST03 only checks for presence: a 5-coefficient transform."""
+    store = build(tmp_path / "s.zarr", consolidated="none")
+    level = tmp_path / "s.zarr" / "measurements" / StoreContext(StoreReader(store, Budget(500)), CFG).levels["measurements"][0][0]["asset"]
+    meta = json.loads((level / "zarr.json").read_text())
+    meta["attributes"]["spatial:transform"] = meta["attributes"]["spatial:transform"][:5]
+    (level / "zarr.json").write_text(json.dumps(meta))
+    res = run(store)
+    assert res["ST12"].status == WARN and "exactly 6 coefficients" in res["ST12"].evidence[0], res["ST12"].evidence
+    group = tmp_path / "s.zarr" / "measurements" / "zarr.json"  # multiscales not a dict: a WARN, not a crash
+    gmeta = json.loads(group.read_text())
+    gmeta["attributes"]["multiscales"] = None
+    group.write_text(json.dumps(gmeta))
+    res = run(store)
+    assert res["ST12"].status == WARN and any("multiscales: attributes: Input should be a valid dictionary" in e for e in res["ST12"].evidence), res["ST12"].evidence
 
 
 def test_unconsolidated_levels_are_read_once(tmp_path):

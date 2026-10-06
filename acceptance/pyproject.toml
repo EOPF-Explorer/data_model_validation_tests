@@ -6,10 +6,12 @@ requires-python = ">=3.12,<3.14"  # titiler-eopf (the reader extra) caps at <3.1
 # zarr and obstore are pinned to the /rstaging image (titiler-eopf sha-5fbea81 uv.lock), so
 # the store checks read stores with the same code. Move the pins when the image moves.
 dependencies = [
+    "geozarr-toolkit==0.1.2",
     "httpx[http2]>=0.27",
     "numpy>=1.26",
     "obstore==0.11.1",
     "pillow>=10",
+    "pydantic>=2.12",  # ST12 catches its ValidationError (geozarr-toolkit's models)
     "zarr[cast-value-rs]==3.2.0",
 ]
 
