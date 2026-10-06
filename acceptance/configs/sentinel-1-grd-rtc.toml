@@ -1,0 +1,31 @@
+# Sentinel-1 GRD RTC cubes. DRAFT. The layout is from data-pipeline
+# tests/fixtures/consolidate_zarr_groups/s1-rtc-32UPB (a staging cube's zarr.json, 30 Sep).
+# The URL forms and the value range are unverified: confirm them on the first run.
+collections = ["sentinel-1-grd-rtc", "sentinel-1-grd-rtc-staging", "sentinel-1-grd-rtc-acquisitions", "sentinel-1-grd-rtc-acquisitions-staging"]
+
+# A cube may have one or both orbit groups; a trailing "?" marks a group as optional.
+open_groups = ["ascending?", "descending?"]
+multiscales_groups = ["ascending?", "descending?"]   # r10m … r720m; vv/vh float32 (time, y, x)
+min_levels = 2
+sample_variables = ["vv", "vh"]
+dtype_allow = ["float32", "uint16"]
+dtype_check_pattern = "^(vv|vh)$"
+min_valid = 0.25
+min_distinct = 16
+
+stac = "https://api.explorer.eopf.copernicus.eu/stac"
+flip = { from = "/raster/", to = "/rstaging/" }    # RG05: does each item link also work on 0.12?
+
+[consumers.openlayers]   # S1 asset media types not confirmed; add consumers if they are profile=multiscales
+
+[render]
+variables = ["vv"]
+rescale = ["0,0.5"]
+"0.12" = { route = "asset", asset = "ascending", extra = { bidx = "1" } }   # the item route ignores bidx/sel → 500
+"0.11" = { group = "/ascending" }
+
+[endpoints]
+# `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs 0.12
+# code (sha-5fbea81) but reports 0.11.0: its pyproject predates the 0.12.0 bump. Confirm on the first run.
+rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.11.0" }
+raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11", expect_version = "0.11.1" }

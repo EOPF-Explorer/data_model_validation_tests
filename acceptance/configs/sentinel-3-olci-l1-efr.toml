@@ -1,0 +1,95 @@
+# Sentinel-3 OLCI L1 EFR. Values verified 6 Oct 2026 against the rc8 store of
+# S3B_OL_1_EFR____20260728T123330… (check_rc8_store.py, the STAC item, /rstaging map.html).
+collections = ["sentinel-3-olci-l1-efr-staging", "sentinel-3-olci-l1-efr"]
+pipeline_ref = "v1.15.0-s3olci-rc8"   # data-pipeline tag that converts and registers these items (not main)
+
+open_groups = ["measurements"]          # radianceData's href since rc8 (data-pipeline#460)
+multiscales_groups = ["measurements"]   # levels r0, r2, r4, r8, r16
+min_levels = 2
+sample_variables = ["oa08_radiance", "oa06_radiance", "oa04_radiance"]
+dtype_allow = ["uint16", "float32"]
+dtype_check_pattern = "_radiance$"
+min_valid = 0.25
+min_distinct = 16
+
+stac = "https://api.explorer.eopf.copernicus.eu/stac"
+flip = { from = "/raster/", to = "/rstaging/" }    # RG05: does each item link also work on 0.12?
+asset_group = { radianceData = "measurements" }   # RG08: each asset must point exactly here
+
+# OLCI radianceData is typed `application/vnd.zarr; version=3` (no profile=multiscales), so
+# eodash draws OLCI from the item's own /raster xyz link (RG04/RG05 test exactly that path),
+# not with OpenLayers GeoZarr. No OL consumer to check. The `product` asset points at the
+# EODC source, not this store: it is deliberately not in asset_group.
+[consumers.openlayers]
+
+[render]
+variables = ["oa08_radiance", "oa06_radiance", "oa04_radiance"]
+rescale = ["10,300", "22,345", "36,390"]
+"0.12" = { route = "asset", asset = "radianceData" }
+"0.11" = { group = "/measurements/r0", extra = { bidx = "1" } }  # the registered xyz/tilejson link form
+
+[endpoints]
+# `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs 0.12
+# code (sha-5fbea81) but reports 0.11.0: its pyproject predates the 0.12.0 bump. Confirm on the first run.
+rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.11.0" }
+raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11", expect_version = "0.11.1" }
+
+[items."S3B_OL_1_EFR____20260728T123330_20260728T123630_20260728T142857_0179_122_380_2340_ESA_O_NR_004"]
+center = [-35.0, 35.0]
+zooms = [5, 9]                          # /rstaging tilejson, 6 Oct
+
+[items."S3A_OL_1_EFR____20260721T142227_20260721T142527_20260721T162757_0179_142_039_1620_PS1_O_NR_004"]
+zooms = [4, 7]                          # 76.6°N: map.html opens blank (fit-bounds ≈ z3 < minzoom 4)
+
+# URL forms and their known outcomes (C8, C14). XFAIL = documented broken, still broken.
+[[contract]]
+api = "0.12"
+name = "asset route, variables= (what map.html uses)"
+path = "assets/radianceData/WebMercatorQuad/tilejson.json"
+params = [["variables", "oa08_radiance"], ["rescale", "10,300"]]
+expect = 200
+ref = "/rstaging, 6 Oct"
+
+[[contract]]
+api = "0.12"
+name = "item route with the 0.11 link syntax (what the registered links use)"
+path = "WebMercatorQuad/tilejson.json"
+params = [["variables", "/measurements/r0:oa08_radiance"], ["rescale", "10,300"], ["bidx", "1"]]
+expect = 422
+ref = "0.11 syntax is rejected on 0.12 (S2 measured 422, 29 Sep); regenerate links before the /raster flip"
+
+[[contract]]
+api = "0.11"
+name = "registered tilejson link form, without the zoom workaround"
+path = "WebMercatorQuad/tilejson.json"
+params = [["variables", "/measurements/r0:oa08_radiance"], ["rescale", "10,300"], ["bidx", "1"]]
+expect = 200
+ref = "register_v1 _S3_OLCI_TILEJSON_ZOOM adds minzoom/maxzoom; is it still needed?"
+
+[[contract]]
+api = "0.12"
+name = "asset route map.html (the viewer the handoff links)"
+path = "assets/radianceData/WebMercatorQuad/map.html"
+params = [["variables", "oa08_radiance"], ["rescale", "10,300"]]
+expect = 200
+ref = "/rstaging, 6 Oct"
+
+[[contract]]
+api = "0.12"
+name = "item /viewer (not built on 0.12)"
+path = "viewer"
+expect = 404
+ref = "URL contract, 29 Sep"
+
+[[contract]]
+api = "0.11"
+name = "item /viewer (the registered viewer link)"
+path = "viewer"
+expect = 200
+ref = "STAC viewer link"
+
+[[known_issues]]
+check = "ST08"
+match = "float64"
+ref = "OLCI radiance is stored as float64; data-model follow-up (uint16 + scale/offset, or float32)"
+until = "2026-12-31"
