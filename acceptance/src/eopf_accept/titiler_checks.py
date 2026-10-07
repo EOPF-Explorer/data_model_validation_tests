@@ -90,18 +90,22 @@ def lonlat_to_tile(lon: float, lat: float, z: int) -> tuple[int, int]:
     return min(max(x, 0), n - 1), min(max(y, 0), n - 1)
 
 
-def fit_zoom(bounds, width: int = 1280, height: int = 800) -> int:
-    """The zoom at which a map of width×height px fits `bounds` (Leaflet-style fitBounds)."""
+# The smallest browser window TI09 expects map.html to open in: a 1280×720 laptop screen
+# (4–5 % of desktops, StatCounter Sep 2026) minus ~120 px of browser chrome (an estimate).
+# A collection config can set `floor_viewport = [w, h]`.
+FLOOR_VIEWPORT = (1280, 600)
+
+
+def extent_px(bounds, z: int) -> tuple[float, float]:
+    """Width and height in pixels of `bounds` drawn at zoom z in WebMercatorQuad."""
     w, s, e, n = bounds
 
     def merc_y(lat):
         lat = max(min(lat, 85.0511), -85.0511)
         return math.asinh(math.tan(math.radians(lat)))
 
-    dx = (e - w) / 360.0
-    dy = (merc_y(n) - merc_y(s)) / (2 * math.pi)
-    scale = min(width / (256 * dx) if dx else 1e9, height / (256 * dy) if dy else 1e9)
-    return int(math.floor(math.log2(scale)))
+    size = 256 * 2**z
+    return (e - w) / 360.0 * size, (merc_y(n) - merc_y(s)) / (2 * math.pi) * size
 
 
 def png_stats(content: bytes) -> dict:
@@ -134,6 +138,8 @@ class TitilerBattery:
         self.center = center
         self.footprint = footprint  # STAC item geometry, when the item was fetched
         self.expected = expected_zooms(cfg, self.api, zoom_oracle)  # zooms.oracle(StoreContext)
+        # which viewer the items link: 0.11 /viewer (OLCI) or map.html (S1); 0.12 map.html
+        self.viewer_page = (cfg.get("viewer_page") or {}).get(self.api, "viewer" if self.api == "0.11" else "map.html")
         self.cache_headers: list[str] = []
         self.tilejson: dict | None = None  # set when usable, even if TI02 fails on its zooms
 
@@ -294,8 +300,9 @@ class TitilerBattery:
         return self.result("TI04", PASS, f"RGB tile z{z}: {st['mode']}, channels differ, {st['valid']:.0%} valid")
 
     def ti06_viewer(self) -> Result:
+        """The viewer page the collection's items link (`viewer_page` in the config, per API)."""
         prefix, params = self._prefix(3)
-        if self.api == "0.11":
+        if self.viewer_page == "viewer":
             url, params = f"{self.base}/collections/{self.cfg['collection']}/items/{self.item}/viewer", []
         else:
             url = f"{prefix}/{TMS}/map.html"
@@ -327,13 +334,24 @@ class TitilerBattery:
         return self.result("TI07", worst, f"{len(entries)} URL forms checked", rows)
 
     def ti09_fit_zoom(self) -> Result:
+        """C13. map.html fills the browser window and calls Leaflet fitBounds (no padding, zoom
+        floored), and its tile layer draws nothing below minzoom. So it opens blank when the
+        item, drawn at minzoom, is wider or taller than the window. 1280×800 (the old rule)
+        is a screen, not a window: it passed S3A 142227, whose map opened blank on 6 Oct."""
         if not self.tilejson:
-            return self.result("TI09", SKIP, "no tilejson")
-        z = fit_zoom(self.tilejson["bounds"])
+            return self.result("TI09", SKIP, "no usable tilejson (TI02)")
+        width, height = self.cfg.get("floor_viewport", FLOOR_VIEWPORT)
         lo = self.tilejson["minzoom"]
-        if z < lo:
-            return self.result("TI09", WARN, f"a 1280x800 map fits the bounds at z{z}, below minzoom {lo}: map.html opens blank (C13)")
-        return self.result("TI09", PASS, f"fit-bounds zoom z{z} ≥ minzoom {lo}")
+        ew, eh = extent_px(self.tilejson["bounds"], lo)
+        margin = math.log2(min(width / ew, height / eh))
+        ev = [f"at minzoom {lo} the bounds span {ew:.0f}×{eh:.0f} px; floor window {width}×{height}; margin {margin:+.2f} zoom",
+              f"map.html opens blank in a window narrower than {ew:.0f} px or shorter than {eh:.0f} px"]
+        if self.viewer_page != "map.html":
+            ev.append(f"the item's own viewer link on this API is /{self.viewer_page}, which TI09 doesn't model; map.html is mounted here too")
+        metrics = {"extent_px": [round(ew), round(eh)], "margin_zoom": round(margin, 3)}
+        if margin < 0:
+            return self.result("TI09", WARN, f"map.html opens blank in a {width}×{height} window: at minzoom {lo} the item spans {ew:.0f}×{eh:.0f} px (C13)", ev, metrics)
+        return self.result("TI09", PASS, f"at minzoom {lo} the item ({ew:.0f}×{eh:.0f} px) fits a {width}×{height} window (margin {margin:+.2f} zoom)", ev, metrics)
 
     def ti05_cold(self) -> Result:
         hits = [h for h in self.cache_headers if "HIT" in h]

@@ -20,6 +20,9 @@ flip = { from = "/raster/", to = "/rstaging/" }    # RG05: does each item link a
 # RG08 on the cube item (sentinel-1-grd-rtc-staging), which carries all four. A per-acquisition
 # item carries one orbit's pair only.
 asset_group = { gamma0-rtc-backscatter-asc = "ascending", gamma0-rtc-backscatter-desc = "descending", border-mask-asc = "ascending", border-mask-desc = "descending" }
+# The cube item's registered viewer link is /raster …/WebMercatorQuad/map.html (7 Oct run), not
+# /viewer: TI06 opens that page and TI09 labels it.
+viewer_page = { "0.11" = "map.html" }
 
 # The orbit-group assets are typed `application/vnd.zarr; version=3` (no profile=multiscales), so
 # eodash draws S1 from the item's xyz/tilejson links (RG04/RG05), not with OpenLayers GeoZarr.

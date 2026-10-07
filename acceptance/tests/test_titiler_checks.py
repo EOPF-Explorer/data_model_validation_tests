@@ -6,7 +6,7 @@ import pytest
 
 from eopf_accept.budget import Budget, Http
 from eopf_accept.model import FAIL, KNOWN, PASS, VOID, WARN, XFAIL, XPASS, apply_known_issues
-from eopf_accept.titiler_checks import TitilerBattery, fit_zoom, urls
+from eopf_accept.titiler_checks import TitilerBattery, extent_px, urls
 
 from .fake_titiler import State, serve
 from .geozarr_fixture import CFG
@@ -210,10 +210,37 @@ def test_url_forms_per_api():
     assert urls("B", "c", "i", render, "0.12")[1] == [("assets", "reflectance|bands=b04,b03,b02")]
 
 
-def test_c13_fit_zoom_below_minzoom_warns(server):
-    """The S3A 76.6°N item: a wide high-latitude swath fits below minzoom, so map.html opens blank."""
+S3A_BOUNDS = [-68.08853799999999, 69.39235226554399, -4.5299534496021465, 83.776383]
+CANARY_BOUNDS = [-43.909883, 29.06358382206983, -26.94228641777719, 41.970559]
+S1_BOUNDS = [11.538706863467372, 44.99758761196769, 12.999320560002849, 46.02436507520001]
+
+
+def test_issue2_extent_at_minzoom_against_the_floor_window(server):
+    """S3A 142227 (76.6°N) opened blank on 6 Oct; the 1280×800 rule passed it at "z4 ≥ 4".
+    At minzoom 4 it spans 723×787 px, taller than a 1280×600 window."""
+    w, h = extent_px(S3A_BOUNDS, 4)
+    assert (round(w), round(h)) == (723, 787)
     state, base = server
-    assert by_id(battery(base).run())["TI09"].status == PASS
-    state.bounds = [-60.0, 60.0, 10.0, 85.0]
-    assert fit_zoom(state.bounds) == 3
-    assert by_id(battery(base).run())["TI09"].status == WARN
+    state.zooms, state.bounds = (4, 7), S3A_BOUNDS
+    r = by_id(battery(base, oracle=None).run())["TI09"]
+    assert r.status == WARN and "723×787 px" in r.summary and "shorter than 787 px" in r.evidence[1], (r.summary, r.evidence)
+    for bounds, zooms in ((CANARY_BOUNDS, (5, 9)), (S1_BOUNDS, (7, 13))):  # their maps open fine
+        state.bounds, state.zooms = bounds, zooms
+        r = by_id(battery(base, oracle=None).run())["TI09"]
+        assert r.status == PASS and r.metrics["margin_zoom"] > 0.5, (bounds, r.summary)
+    cfg = {**CFG, "floor_viewport": [1920, 1080]}  # a config can move the floor
+    state.zooms, state.bounds = (4, 7), S3A_BOUNDS
+    assert by_id(battery(base, cfg=cfg, oracle=None).run())["TI09"].status == PASS
+
+
+def test_issue2_collapsed_raster_tilejson_warns_with_the_linked_page(server):
+    """TI09 ran only on a TI02 PASS, so the canary's /raster map.html blank was a SKIP. It now
+    runs on any usable tilejson and says which page the items actually link."""
+    state, base = server
+    state.api, state.zooms, state.bounds = "0.11", (9, 9), CANARY_BOUNDS
+    r = by_id(battery(base, ep=RASTER).run())["TI09"]
+    assert r.status == WARN and any("/viewer, which TI09 doesn't model" in e for e in r.evidence), r.evidence
+    cfg = {**CFG, "viewer_page": {"0.11": "map.html"}}  # S1 links map.html: no caveat, and TI06 opens it
+    res = by_id(battery(base, ep=RASTER, cfg=cfg).run())
+    assert not any("doesn't model" in e for e in res["TI09"].evidence)
+    assert res["TI06"].summary.startswith("map.html")
