@@ -7,7 +7,7 @@ multiscales_groups = ["measurements/reflectance"]  # r10m, r20m, r60m, r120m, r3
 min_levels = 2
 sample_variables = ["b04", "b03", "b02"]
 dtype_allow = ["uint16", "float32"]
-dtype_check_pattern = "^b[0-9]{2}a?$"
+dtype_check_pattern = "^b(0[1-9]|1[0-2]|8a)$"   # b01–b12 and b8a
 min_valid = 0.25
 min_distinct = 16
 

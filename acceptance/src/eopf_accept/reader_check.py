@@ -6,7 +6,7 @@ request budget, so it never runs against a production URL. Needs the `reader` ex
 
 import time
 
-from .model import FAIL, PASS, SKIP, Result
+from .model import FAIL, PASS, SKIP, VOID, Result
 from .titiler_checks import lonlat_to_tile
 
 
@@ -15,8 +15,8 @@ def tr01_local_reader(store_url: str, cfg: dict, center=None) -> Result:
         return Result("TR01", "reader", SKIP, "the local reader runs on scratch stores only (s3:// or a local path)")
     try:
         from titiler.eopf.reader import GeoZarrReader
-    except ImportError:
-        return Result("TR01", "reader", SKIP, "titiler-eopf not installed (install the `reader` extra)")
+    except ImportError:  # asked for and not run: no verdict, rather than a silent PASS
+        return Result("TR01", "reader", VOID, "titiler-eopf not installed: run `uv sync --extra reader`, or drop `reader` from --groups")
     rows, fails, metrics = [], [], {}
     variables = cfg["render"]["variables"]
     for group in cfg.get("open_groups", []):

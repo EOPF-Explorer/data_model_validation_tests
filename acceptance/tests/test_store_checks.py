@@ -3,6 +3,7 @@
 import copy
 import datetime as dt
 import json
+import re
 
 import pytest
 
@@ -48,9 +49,18 @@ def test_c1_no_spatial_shape_anywhere_fails_st03(tmp_path):
 
 
 def test_c1_shape_on_groups_only_is_a_warning(tmp_path):
-    """titiler falls back to the level group's attrs, so this renders: WARN, not FAIL."""
+    """Layout entries keep spatial:transform but not spatial:shape: titiler falls back to the
+    level group's shape (get_maxzoom/get_minzoom, _get_variable), so this renders: WARN."""
     res = run(build(tmp_path / "s.zarr", layout_shape=False))
-    assert res["ST03"].status == WARN
+    assert res["ST03"].status == WARN, res["ST03"].evidence
+
+
+def test_w1_layout_without_transform_fails_st03_even_when_the_group_has_one(tmp_path):
+    """7 Oct review (W1): titiler 0.12 reads layout["spatial:transform"] with no fallback, so
+    every tile 500s although the level groups carry a transform. It used to WARN."""
+    res = run(build(tmp_path / "s.zarr", layout_transform=False))
+    assert res["ST03"].status == FAIL
+    assert any("layout entry has no spatial:transform" in e for e in res["ST03"].evidence), res["ST03"].evidence
 
 
 def test_c15_level_without_spatial_dimensions_fails_st03(tmp_path):
@@ -152,6 +162,61 @@ def test_store_reads_spend_the_budget(tmp_path):
 
     with pytest.raises(BudgetExceeded):
         run(build(tmp_path / "s.zarr"), budget=3)
+
+
+def test_w3_st08_reports_each_dtype_so_a_known_issue_cannot_cover_another(tmp_path):
+    """7 Oct review (W3): "float16, float64" in one problem matched a "float64" known issue."""
+    res = run(build(tmp_path / "s.zarr", dtype="float64", dtype_at={"r0/oa04_radiance": "float16"}))
+    assert res["ST08"].status == FAIL
+    assert sum("dtype float16" in p for p in res["ST08"].problems) == 1, res["ST08"].problems
+    apply_known_issues([res["ST08"]], [{"check": "ST08", "match": "float64", "ref": "x", "until": "2026-12-31"}], dt.date(2026, 10, 7))
+    assert res["ST08"].status == FAIL
+
+
+def test_w4_st08_checks_every_level_not_only_the_finest(tmp_path):
+    """7 Oct review (W4): float64 only at a coarser level used to PASS."""
+    res = run(build(tmp_path / "s.zarr", dtype_at={"r2/oa08_radiance": "float64"}))
+    assert res["ST08"].status == FAIL and res["ST08"].problems[0].startswith("measurements/r2: dtype float64"), res["ST08"].problems
+    # the OLCI known issue still covers float64 on every level
+    res = run(build(tmp_path / "s2.zarr", dtype="float64"))
+    assert len(res["ST08"].problems) == 2
+    apply_known_issues([res["ST08"]], [{"check": "ST08", "match": "float64", "ref": "x", "until": "2026-12-31"}], dt.date(2026, 10, 7))
+    assert res["ST08"].status == KNOWN
+
+
+def test_w4_s2_dtype_pattern_covers_all_twelve_bands():
+    from eopf_accept.cli import CONFIG_DIR, load_config
+
+    pattern = re.compile(load_config("sentinel-2-l2a", None, CONFIG_DIR)["dtype_check_pattern"])
+    bands = [f"b{i:02d}" for i in range(1, 13)] + ["b8a"]
+    assert all(pattern.search(b) for b in bands)
+    assert not any(pattern.search(n) for n in ("b13", "b00", "scl", "b02_detector"))
+
+
+def test_w11_a_band_missing_from_the_coarsest_level_fails_st09(tmp_path):
+    """7 Oct review (W11): ST09 skipped the variable and the store verdict stayed PASS."""
+    res = run(build(tmp_path / "s.zarr", missing=("r2/oa08_radiance",)))
+    assert res["ST09"].status == FAIL
+    assert "missing from the coarsest level" in res["ST09"].summary
+
+
+def test_w11_tr01_without_the_reader_extra_is_void_not_skip(tmp_path, monkeypatch):
+    """Asked for and not run: no verdict, instead of a SKIP that leaves a scratch run PASS."""
+    import sys
+
+    from eopf_accept.model import VOID
+    from eopf_accept.reader_check import tr01_local_reader
+
+    monkeypatch.setitem(sys.modules, "titiler.eopf.reader", None)  # import raises ImportError
+    assert tr01_local_reader(build(tmp_path / "s.zarr"), CFG).status == VOID
+
+
+def test_w2_a_fail_without_problems_is_never_downgraded():
+    """7 Oct review (W2): a count summary ("12 visibility problem(s)") would also cover a
+    later, different failure of the same check."""
+    r = Result("ST04", "store", FAIL, "12 visibility problem(s)")
+    apply_known_issues([r], [{"check": "ST04", "match": "visibility", "ref": "x", "until": "2026-12-31"}], dt.date(2026, 10, 7))
+    assert r.status == FAIL and "known issue not applied" in r.evidence[-1]
 
 
 def test_a_known_issue_cannot_hide_a_second_failure():

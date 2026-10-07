@@ -64,7 +64,7 @@ name = "registered tilejson link form, without the zoom workaround"
 path = "WebMercatorQuad/tilejson.json"
 params = [["variables", "/measurements/r0:oa08_radiance"], ["rescale", "10,300"], ["bidx", "1"]]
 expect = 200
-ref = "200, but zooms 9–9 on 0.11.1 (TI02, 6 Oct): register_v1 _S3_OLCI_TILEJSON_ZOOM is still needed until the flip"
+ref = "status only; zoom content: see TI02"
 
 [[contract]]
 api = "0.12"

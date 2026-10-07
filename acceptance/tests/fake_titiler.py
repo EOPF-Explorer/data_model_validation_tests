@@ -17,7 +17,8 @@ class State:
         self.version = "0.11.0"  # what sha-5fbea81 reports
         self.api = "0.12"  # which routes /api lists
         self.tilejson_status = 200
-        self.tile = "good"  # good | empty | gray
+        self.zooms = (5, 9)  # tilejson minzoom, maxzoom
+        self.tile = "good"  # good | empty | gray | sparse (5 % valid)
         self.x_cache = "MISS"
         self.bounds = [-36.0, 34.0, -34.0, 36.0]
         self.force_status: int | None = None  # answer everything with this (503, 302)
@@ -30,6 +31,8 @@ def _png(n_bands: int, mode: str) -> bytes:
     rng = np.random.default_rng(1)
     h = w = 256
     alpha = np.full((h, w), 0 if mode == "empty" else 255, np.uint8)
+    if mode == "sparse":
+        alpha[h // 20:, :] = 0
     base = rng.integers(0, 255, (h, w), dtype=np.uint8)
     if n_bands >= 3:
         bands = [base] * 3 if mode == "gray" else [base, np.roll(base, 1), np.roll(base, 2)]
@@ -83,7 +86,7 @@ def serve(state: State):
             if u.path.endswith("tilejson.json"):
                 if state.tilejson_status != 200:
                     return self.send(state.tilejson_status, b"Internal Server Error", "text/plain")
-                tj = {"minzoom": 5, "maxzoom": 9, "bounds": state.bounds, "tiles": []}
+                tj = {"minzoom": state.zooms[0], "maxzoom": state.zooms[1], "bounds": state.bounds, "tiles": []}
                 return self.send(200, json.dumps(tj).encode(), "application/json")
             if u.path.endswith(".png"):
                 return self.send(200, _png(n, state.tile), "image/png")

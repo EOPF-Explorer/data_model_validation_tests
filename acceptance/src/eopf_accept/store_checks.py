@@ -83,6 +83,7 @@ class StoreContext:
             layout = (_attrs(self.nodes[g]).get("multiscales") or {}).get("layout") or []
             self.levels[g] = [(e, f"{g}/{e.get('asset')}", reader.node(f"{g}/{e.get('asset')}")) for e in layout]
         self._arrays: dict[str, dict[str, dict]] = {}
+        self.fallback_levels: set[str] = set()  # levels seen only through sample_variables
 
     def arrays(self, g: str, level_path: str) -> dict[str, dict]:
         """Data arrays of a level: from consolidated metadata, else the configured variables."""
@@ -91,6 +92,7 @@ class StoreContext:
             if not found:
                 metas = {v: self.reader.node(f"{level_path}/{v}") for v in self.cfg.get("sample_variables", [])}
                 found = {v: m for v, m in metas.items() if m}
+                self.fallback_levels.add(level_path)
             self._arrays[level_path] = found
         return self._arrays[level_path]
 
@@ -151,14 +153,18 @@ def st03_multiscales(ctx: StoreContext) -> Result:
             if i in (0, len(levels) - 1) and not (in_layout or in_group):
                 which = "maxzoom" if i == 0 else "minzoom"
                 fails.append(f"{path}: no spatial:shape+spatial:transform in the layout entry or the group; {which} can't be derived, so tilejson without zoom params returns 500")
-            elif not in_layout:
-                warns.append(f"{path}: layout entry lacks spatial:shape/spatial:transform (the group has them)")
+            # titiler-eopf 0.12 (5fbea81) reads layout["spatial:transform"] with no fallback:
+            # get_multiscale_level for every level, and _get_variable's
+            # `attrs.get("spatial:transform", layout["spatial:transform"])` evaluates its default
+            # first. A transform on the level group alone doesn't help: every tile returns 500.
+            if "spatial:transform" not in entry:
+                fails.append(f"{path}: layout entry has no spatial:transform; titiler-eopf 0.12 reads it unguarded (reader.py get_multiscale_level, _get_variable), so every tile returns 500")
+            elif "spatial:shape" not in entry and "spatial:shape" in la:
+                warns.append(f"{path}: layout entry lacks spatial:shape (the group has it)")
             if "spatial:shape" not in la:
                 warns.append(f"{path}: group has no spatial:shape")
             if cv.SPATIAL in cv.declared(la) and "spatial:dimensions" not in la:
                 fails.append(f"{path}: declares spatial but has no spatial:dimensions; titiler-eopf 0.12 reads it unguarded (reader.py _get_variable), so tiles from this level return 500")
-            if "spatial:transform" not in entry and "spatial:transform" not in la:
-                fails.append(f"{path}: no spatial:transform in the group or the layout entry; a tile that selects this level fails")
             if "spatial:shape" in entry and "spatial:shape" in la and list(entry["spatial:shape"]) != list(la["spatial:shape"]):
                 fails.append(f"{path}: layout spatial:shape {entry['spatial:shape']} != group {la['spatial:shape']}")
             shape = entry.get("spatial:shape") or la.get("spatial:shape")
@@ -295,12 +301,18 @@ def st08_dtype_and_compression(ctx: StoreContext) -> Result:
     for g, levels in ctx.levels.items():
         if not levels:
             continue
-        _, path, _ = levels[0]  # the finest level carries the bulk of the bytes
+        # dtypes on every level (metadata only); one problem per level and dtype, so a known
+        # issue for "float64" can't also cover a float16 next to it
+        for _, lpath, _ in levels:
+            arrays = ctx.arrays(g, lpath)
+            checked = [n for n in arrays if pattern.search(n)]
+            for dtype in sorted({str(arrays[n].get("data_type")) for n in checked} - set(allow) if allow else set()):
+                names = [n for n in checked if str(arrays[n].get("data_type")) == dtype]
+                fails.append(f"{lpath}: dtype {dtype} not in the allow-list {sorted(allow)} ({len(names)} arrays, e.g. {names[:3]})")
+            fallback = " (no consolidated listing: configured sample_variables only)" if lpath in ctx.fallback_levels else ""
+            rows.append(f"{lpath}: dtype checked on {len(checked)} arrays{fallback}")
+        _, path, _ = levels[0]  # compression: the finest level carries the bulk of the bytes
         arrays = ctx.arrays(g, path)
-        bad = sorted({m["data_type"] for n, m in arrays.items() if pattern.search(n) and allow and m.get("data_type") not in allow})
-        if bad:
-            names = [n for n, m in arrays.items() if m.get("data_type") in bad and pattern.search(n)]
-            fails.append(f"{path}: dtype {', '.join(map(str, bad))} not in the allow-list {sorted(allow)} ({len(names)} arrays, e.g. {names[:3]})")
         for name in [v for v in ctx.cfg.get("sample_variables", []) if v in arrays][:3]:
             meta = arrays[name]
             if not isinstance(meta.get("data_type"), str):
@@ -310,14 +322,16 @@ def st08_dtype_and_compression(ctx: StoreContext) -> Result:
             grid = meta["chunk_grid"]["configuration"]["chunk_shape"]
             raw = math.prod(grid) * np.dtype(meta["data_type"]).itemsize
             if not stored:
-                rows.append(f"{key}: not stored (all fill?)")
+                warns.append(f"{key}: centre chunk not stored (all fill?), compression not measured")
                 continue
             ratio = raw / stored
             rows.append(f"{path}/{name}: {meta['data_type']}, stored chunk {stored / 1e6:.2f} MB, raw {raw / 1e6:.2f} MB, ratio {ratio:.2f}")
             if meta["data_type"].startswith("float") and ratio < 1.2:
                 warns.append(f"{path}/{name}: {meta['data_type']} compresses only {ratio:.2f}x")
     status = FAIL if fails else WARN if warns else PASS
-    return Result("ST08", "store", status, fails[0] if fails else (warns[0] if warns else "dtypes allowed, compression OK"), fails + warns + rows, problems=fails)
+    summary = (fails[0] + (f" (+{len(fails) - 1} more)" if len(fails) > 1 else "") if fails else
+               warns[0] if warns else "dtypes allowed on every level, compression OK")
+    return Result("ST08", "store", status, summary, fails + warns + rows, problems=fails)
 
 
 def _is_empty(block: np.ndarray, fill) -> np.ndarray:
@@ -329,7 +343,11 @@ def _is_empty(block: np.ndarray, fill) -> np.ndarray:
 
 def st09_data_present(ctx: StoreContext) -> Result:
     """The coarsest level is small: read it whole, then read the finest-level block under a
-    pixel it shows as valid. A bbox centre can be nodata on a partial S2 scene."""
+    pixel it shows as valid. A bbox centre can be nodata on a partial S2 scene.
+
+    Fails only on all-fill (it does not apply `min_valid`, which is TI03's), and when a
+    configured sample variable at the finest level is missing from the coarsest: a
+    pyramid that drops a band would otherwise skip the check and leave the run green."""
     fails, rows = [], []
     zstore = ctx.reader.zarr_store("")
     for g, levels in ctx.levels.items():
@@ -337,6 +355,9 @@ def st09_data_present(ctx: StoreContext) -> Result:
             continue
         arrays_fine = ctx.arrays(g, levels[0][1])
         arrays_coarse = ctx.arrays(g, levels[-1][1])
+        for v in ctx.cfg.get("sample_variables", []):
+            if v in arrays_fine and v not in arrays_coarse:
+                fails.append(f"{levels[-1][1]}/{v}: sample variable is at the finest level {levels[0][1]} but missing from the coarsest level")
         for name in [v for v in ctx.cfg.get("sample_variables", []) if v in arrays_fine and v in arrays_coarse][:1]:
             coarse = zarr.open_array(store=zstore, path=f"{levels[-1][1]}/{name}", mode="r")
             lead = (-1,) * (coarse.ndim - 2)
@@ -359,8 +380,10 @@ def st09_data_present(ctx: StoreContext) -> Result:
             rows.append(f"{levels[0][1]}/{name}: block at ({y0}, {x0}) {block.shape}, {valid:.0%} valid")
             if valid == 0:
                 fails.append(f"{levels[0][1]}/{name}: the finest level is empty where the coarsest level has data")
-    return Result("ST09", "store", FAIL if fails else PASS if rows else SKIP,
-                  fails[0] if fails else ("data present at the finest and coarsest levels" if rows else "no sample_variables found"), fails + rows, problems=fails)
+    summary = (fails[0] if fails else
+               f"not all fill at the finest and coarsest levels ({len(rows)} arrays sampled; fails only on all-fill)" if rows else
+               "no configured sample_variables at both the finest and coarsest levels")
+    return Result("ST09", "store", FAIL if fails else PASS if rows else SKIP, summary, fails + rows, problems=fails)
 
 
 def ht02_open_without_listing(ctx: StoreContext) -> Result:

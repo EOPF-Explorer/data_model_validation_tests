@@ -203,7 +203,7 @@ class TitilerBattery:
             # Require valid pixels in proportion to the tile's share of the footprint; at
             # minzoom, where the tile is mostly outside it, only "not all nodata".
             cover = geo.coverage(self._footprint(), z, x, y)
-            want = 0.0 if z == lo else min_valid * cover
+            want = 0.0 if z == lo < hi else min_valid * cover  # lo == hi: the only tile gets no exemption
             rows.append(f"z{z} {x}/{y}: {st['mode']} {st['size'][0]}x{st['size'][1]}, {st['valid']:.0%} valid ({cover:.0%} of the tile inside the footprint), {st['distinct']} distinct values, {len(r.content)} B, {r.elapsed.total_seconds():.2f} s")
             metrics[f"z{z}"] = {"valid": st["valid"], "coverage": cover, "distinct": st["distinct"], "seconds": r.elapsed.total_seconds()}
             if st["valid"] <= want:

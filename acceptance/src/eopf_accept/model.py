@@ -29,17 +29,22 @@ def apply_known_issues(results: list[Result], known: list[dict], today: dt.date)
     """Turn a FAIL into KNOWN when a configured, unexpired known issue matches it.
 
     A known issue matches on check id (and group, e.g. `titiler:raster`, when it names one)
-    when its `match` is in every one of the result's `problems` (the summary alone when it
-    lists none), so it cannot hide a new failure reported next to it. Evidence isn't
-    searched: its detail rows over-match (ST08's compression rows also say "float64").
-    After `until`, the same failure is a FAIL again, so an accepted issue cannot hide forever.
+    when its `match` is in every one of the result's `problems`, so it cannot hide a new
+    failure reported next to it. A FAIL that lists no problems is never downgraded: its
+    summary may be a count ("12 visibility problem(s)") that would also cover a later,
+    different failure. Evidence isn't searched: its detail rows over-match (ST08's
+    compression rows also say "float64"). After `until`, the same failure is a FAIL again,
+    so an accepted issue cannot hide forever.
     """
     for r in results:
         if r.status != FAIL:
             continue
-        problems = r.problems or [r.summary]
         for k in known:
-            if (k["check"] == r.id and k.get("group", r.group) == r.group and all(k["match"] in p for p in problems)
-                    and today <= dt.date.fromisoformat(str(k["until"]))):
+            if k["check"] != r.id or k.get("group", r.group) != r.group or today > dt.date.fromisoformat(str(k["until"])):
+                continue
+            if not r.problems:
+                r.evidence.append(f"known issue not applied ({k['ref']}): {r.id} lists no individual problems to match")
+                break
+            if all(k["match"] in p for p in r.problems):
                 r.status, r.known_issue = KNOWN, f"{k['ref']} (until {k['until']})"
                 break

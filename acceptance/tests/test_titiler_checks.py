@@ -105,6 +105,16 @@ def test_empty_tiles_fail_ti03(server):
     assert by_id(battery(base).run())["TI03"].status == FAIL
 
 
+def test_w10_a_collapsed_range_gets_no_minzoom_exemption(server):
+    """7 Oct review (W10): with minzoom == maxzoom the only tile is the minzoom tile, and the
+    exemption ("not all nodata" is enough) let a 5 % valid tile pass inside the footprint."""
+    state, base = server
+    state.tile = "sparse"
+    assert by_id(battery(base).run())["TI03"].status == FAIL  # z7/z9 need 25 %
+    state.zooms = (9, 9)
+    assert by_id(battery(base).run())["TI03"].status == FAIL
+
+
 def test_partial_footprint_does_not_false_fail(server):
     """A tile mostly outside a small footprint needs only its share of valid pixels."""
     state, base = server

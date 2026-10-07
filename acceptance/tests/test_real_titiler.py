@@ -118,6 +118,17 @@ def test_c1_reproduced_on_real_titiler_012(tmp_path, titiler_012):
     assert tr.status == FAIL, tr.evidence
 
 
+def test_w1_layout_without_transform_on_real_titiler_012(tmp_path, titiler_012):
+    """Why ST03 FAILs a layout entry without spatial:transform (W1) but only WARNs one without
+    spatial:shape: the real app 500s every tile in the first case and renders the second."""
+    no_transform = build(tmp_path / "a.zarr", layout_transform=False)
+    res = run_battery(titiler_012(no_transform))
+    assert res["TI03"].status == FAIL and "500" in res["TI03"].summary, res["TI03"].evidence
+    no_shape = build(tmp_path / "b.zarr", layout_shape=False)
+    res = run_battery(titiler_012(no_shape))
+    assert res["TI03"].status == PASS, res["TI03"].evidence
+
+
 def test_c15_reproduced_on_real_titiler_012(tmp_path, titiler_012):
     """No spatial:dimensions on the level groups: tilejson is fine, every tile 500s."""
     store = build(tmp_path / "s.zarr", level_dims=False)
