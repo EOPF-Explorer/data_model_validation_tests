@@ -221,7 +221,8 @@ class TitilerBattery:
                 else:
                     probs.append(f"zooms {lo}–{hi}, the store's multiscales give {elo}–{ehi}")
         anchor = (self.cfg.get("items", {}).get(self.item) or {}).get("zooms")
-        if anchor and zooms_ok and [lo, hi] != list(anchor):
+        # When the store gives the anchor's range, the store comparison above already says this
+        if anchor and zooms_ok and [lo, hi] != list(anchor) and (isinstance(exp, str) or list(exp[0]) != list(anchor)):
             probs.append(f"zooms {lo}–{hi}, the item config expects {anchor[0]}–{anchor[1]}")
         if anchor and not isinstance(exp, str) and list(exp[0]) != list(anchor):
             probs.append(f"the store gives {exp[0][0]}–{exp[0][1]} but the item config anchors {anchor[0]}–{anchor[1]}")
