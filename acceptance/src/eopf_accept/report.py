@@ -1,6 +1,7 @@
 """run.json (machine-readable) and report.md (for a human)."""
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from .model import FAILING, Result
@@ -18,7 +19,7 @@ def verdict(results: list[Result]) -> str:
 
 def write(out_dir: Path, meta: dict, results: list[Result]) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    run = {**meta, "verdict": verdict(results), "results": [r.to_dict() for r in results]}
+    run = {**meta, "verdict": verdict(results), "results": [asdict(r) for r in results]}
     (out_dir / "run.json").write_text(json.dumps(run, indent=2, default=str))
 
     lines = [

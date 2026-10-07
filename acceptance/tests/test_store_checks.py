@@ -63,6 +63,19 @@ def test_w1_layout_without_transform_fails_st03_even_when_the_group_has_one(tmp_
     assert any("layout entry has no spatial:transform" in e for e in res["ST03"].evidence), res["ST03"].evidence
 
 
+def test_malformed_transform_fails_st03_instead_of_crashing_the_store_checks(tmp_path):
+    """7 Oct code review: np.allclose raised on a non-numeric level transform, so one bad
+    level ended every store check as CRASH/VOID instead of an ST03 FAIL."""
+    store = build(tmp_path / "s.zarr")
+    level = tmp_path / "s.zarr" / "measurements" / StoreContext(StoreReader(store, Budget(500)), CFG).levels["measurements"][0][0]["asset"]
+    meta = json.loads((level / "zarr.json").read_text())
+    meta["attributes"]["spatial:transform"] = ["x"] * 6
+    (level / "zarr.json").write_text(json.dumps(meta))
+    res = run(store)
+    assert res["ST03"].status == FAIL
+    assert any("layout spatial:transform" in e and "!= group" in e for e in res["ST03"].evidence), res["ST03"].evidence
+
+
 def test_transforms_must_agree_with_the_group_bbox(tmp_path):
     """titiler takes zooms from the transforms and bounds from spatial:bbox; consistently
     wrong transforms would make the zoom oracle agree with titiler, so ST03 ties them."""

@@ -55,6 +55,13 @@ def _resolution(transform) -> float | None:
         return None
 
 
+def _same_transform(a, b) -> bool:
+    try:
+        return len(a) == len(b) and bool(np.allclose(a, b, rtol=1e-9, atol=0))
+    except (TypeError, ValueError):  # non-numeric: an ST03 FAIL, not a crash of every store check
+        return False
+
+
 def _bounds_vs_bbox(transform, shape, bbox) -> str | None:
     """titiler takes zooms from a level's transform and shape but tilejson bounds from the
     group's spatial:bbox: they must describe the same extent, within one pixel of the level."""
@@ -191,7 +198,7 @@ def st03_multiscales(ctx: StoreContext) -> Result:
             if "spatial:shape" in entry and "spatial:shape" in la and list(entry["spatial:shape"]) != list(la["spatial:shape"]):
                 fails.append(f"{path}: layout spatial:shape {entry['spatial:shape']} != group {la['spatial:shape']}")
             et, lt = entry.get("spatial:transform"), la.get("spatial:transform")
-            if et and lt and (len(et) != len(lt) or not np.allclose(et, lt, rtol=1e-9, atol=0)):
+            if et and lt and not _same_transform(et, lt):
                 fails.append(f"{path}: layout spatial:transform {et} != group {lt}")
             if problem := _bounds_vs_bbox(entry.get("spatial:transform") or la.get("spatial:transform"),
                                           entry.get("spatial:shape") or la.get("spatial:shape"), a.get("spatial:bbox")):

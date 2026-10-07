@@ -246,7 +246,9 @@ class TitilerBattery:
 
     def ti03_tiles(self) -> Result:
         """One tile per pyramid level (each level's zoom from the store), so every resolution
-        is read; without the store, minzoom, middle and maxzoom of the tilejson."""
+        is read; without the store, minzoom, middle and maxzoom of the tilejson. A render that
+        reads one level group (the 0.11 r0 links) reads that level at every zoom, and the
+        summary says so."""
         if not self.tilejson:
             return self.result("TI03", SKIP, "no usable tilejson (TI02)")
         lo, hi = self.tilejson["minzoom"], self.tilejson["maxzoom"]
@@ -278,7 +280,9 @@ class TitilerBattery:
                 fails.append(f"z{z} {x}/{y}: {st['valid']:.0%} valid pixels (want > {want:.0%})")
             elif st["distinct"] < min_distinct:
                 fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values (a constant render?)")
-        which = "one per pyramid level" if per_level else "tilejson min, mid, max"
+        level = self.expected[2] if per_level else None
+        which = (f"each pyramid level's zoom, all read from level group {level}" if level else
+                 "one per pyramid level" if per_level else "tilejson min, mid, max")
         return self.result("TI03", FAIL if fails else PASS, fails[0] if fails else f"tiles at z{', z'.join(map(str, zooms))} ({which}) decode with real pixels",
                            fails + rows, metrics, problems=fails)
 

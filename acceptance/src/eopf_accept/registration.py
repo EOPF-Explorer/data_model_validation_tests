@@ -68,7 +68,8 @@ def bucket_key(url: str) -> str:
 def rg08_hrefs(item: dict, store: str, cfg: dict, ctx=None) -> Result:
     """Each configured asset points exactly at its group of THIS store (C9: a failed
     registration leaves the previous item, whose hrefs still point at the old layout), and
-    that group exists (from the StoreContext already read, no extra request). When the item
+    that group exists (from the StoreContext already read; a group it doesn't hold costs one
+    zarr.json read). When the item
     config declares its groups (a single-orbit S1 cube), only their assets are required."""
     root = bucket_key(store)
     fails, rows = [], []

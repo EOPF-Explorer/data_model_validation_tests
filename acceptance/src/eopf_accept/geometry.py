@@ -67,15 +67,6 @@ def _centroid(ring) -> tuple[float, float]:
     return cx, cy
 
 
-def tile_lonlat_bounds(z: int, x: int, y: int) -> tuple[float, float, float, float]:
-    n = 2**z
-
-    def lat(yy):
-        return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * yy / n))))
-
-    return x / n * 360 - 180, lat(y + 1), (x + 1) / n * 360 - 180, lat(y)
-
-
 def coverage(geometry: dict, z: int, x: int, y: int, samples: int = 16) -> float:
     """Share of the tile inside the geometry, sampled on a samples×samples grid in mercator."""
     n = 2**z

@@ -1,7 +1,7 @@
 """Check results and the known-issue rule."""
 
 import datetime as dt
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 
 PASS, FAIL, WARN, KNOWN, XFAIL, XPASS, SKIP, VOID = (
     "PASS", "FAIL", "WARN", "KNOWN", "XFAIL", "XPASS", "SKIP", "VOID",
@@ -20,9 +20,6 @@ class Result:
     metrics: dict = field(default_factory=dict)
     known_issue: str | None = None
     problems: list[str] = field(default_factory=list)  # every failure; the summary shows the first
-
-    def to_dict(self) -> dict:
-        return asdict(self)
 
 
 def apply_known_issues(results: list[Result], known: list[dict], today: dt.date) -> None:

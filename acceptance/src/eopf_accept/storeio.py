@@ -27,7 +27,6 @@ class StoreReader:
     def __init__(self, url: str, budget: Budget):
         self.url = normalize(url)
         self.budget = budget
-        self.bytes_read = 0
         self._stores: dict[str, object] = {}
 
     def _store(self, prefix: str = ""):
@@ -46,7 +45,6 @@ class StoreReader:
             data = bytes(obstore.get(self._store(), path).bytes())
         except FileNotFoundError:
             return None
-        self.bytes_read += len(data)
         return json.loads(data)
 
     def node(self, group: str) -> dict | None:
@@ -88,17 +86,12 @@ class BudgetedObjectStore(ObjectStore):
 
     async def get(self, key, prototype, byte_range=None):
         self._budget.take()
-        buf = await super().get(key, prototype, byte_range)
-        if buf is not None:
-            self._reader.bytes_read += len(buf)
-        return buf
+        return await super().get(key, prototype, byte_range)
 
     async def get_partial_values(self, prototype, key_ranges):
         key_ranges = list(key_ranges)
         self._budget.take(len(key_ranges))
-        out = await super().get_partial_values(prototype, key_ranges)
-        self._reader.bytes_read += sum(len(b) for b in out if b is not None)
-        return out
+        return await super().get_partial_values(prototype, key_ranges)
 
     def _refuse(self, what: str):
         if not self._allow_list:

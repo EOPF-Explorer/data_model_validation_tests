@@ -7,7 +7,8 @@ Two layers:
    it is sent. Once the cap is reached, `take()` raises and nothing more goes out.
 
 There is no watcher, timeout or signal anywhere: the run stops because the tool won't
-issue request N+1 (see "Bounded and destructive operations" in ~/.claude/CLAUDE.md).
+issue request N+1. A bound enforced from outside (a kill, a timeout) can be silently
+ignored by the process it is meant to stop.
 """
 
 import json

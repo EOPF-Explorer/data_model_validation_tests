@@ -101,6 +101,8 @@ def test_issue1_r0_collapse_fails_with_its_mechanism_without_any_item_config(ser
     assert res["TI03"].status != "SKIP" and res["TI09"].status != "SKIP" and res["TI04"].status != "SKIP"
     tiles = sorted({int(p.split("/tiles/WebMercatorQuad/")[1].split("/")[0]) for p in state.requests if "/tiles/" in p})
     assert tiles == [5, 6, 7, 8, 9], tiles
+    # every one of those tiles reads r0: the summary must not claim each level was read
+    assert "all read from level group measurements/r0" in res["TI03"].summary, res["TI03"].summary
 
 
 def test_issue1_other_mismatches_get_the_generic_text(server):
