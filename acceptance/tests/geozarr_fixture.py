@@ -112,6 +112,7 @@ CFG = {
     "dtype_allow": ["uint16", "float32"],
     "dtype_check_pattern": "_radiance$",
     "consumers": {"openlayers": {}},
+    "asset_group": {"radianceData": "measurements"},
     "render": {
         "variables": ["oa08_radiance", "oa06_radiance", "oa04_radiance"],
         "rescale": ["10,300", "10,300", "10,300"],

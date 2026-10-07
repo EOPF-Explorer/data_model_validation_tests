@@ -273,10 +273,12 @@ source = { editable = "." }
 dependencies = [
     { name = "geozarr-toolkit" },
     { name = "httpx", extra = ["http2"] },
+    { name = "morecantile" },
     { name = "numpy" },
     { name = "obstore" },
     { name = "pillow" },
     { name = "pydantic" },
+    { name = "rasterio" },
     { name = "zarr", extra = ["cast-value-rs"] },
 ]
 
@@ -297,10 +299,12 @@ dev = [
 requires-dist = [
     { name = "geozarr-toolkit", specifier = "==0.1.2" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.27" },
+    { name = "morecantile", specifier = "==7.1.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "obstore", specifier = "==0.11.1" },
     { name = "pillow", specifier = ">=10" },
     { name = "pydantic", specifier = ">=2.12" },
+    { name = "rasterio", specifier = "==1.5.2" },
     { name = "redis", marker = "extra == 'reader'" },
     { name = "titiler-eopf", marker = "extra == 'reader'", git = "https://github.com/EOPF-Explorer/titiler-eopf?rev=5fbea81ff7b6cfd556c46be5bf1bf6671fb5ac58" },
     { name = "xarray", marker = "extra == 'reader'", specifier = "==2026.4.0" },

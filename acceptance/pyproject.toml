@@ -8,10 +8,12 @@ requires-python = ">=3.12,<3.14"  # titiler-eopf (the reader extra) caps at <3.1
 dependencies = [
     "geozarr-toolkit==0.1.2",
     "httpx[http2]>=0.27",
+    "morecantile==7.1.0",  # with rasterio: the TI02 zoom oracle uses titiler's own zoom arithmetic
     "numpy>=1.26",
     "obstore==0.11.1",
     "pillow>=10",
     "pydantic>=2.12",  # ST12 catches its ValidationError (geozarr-toolkit's models)
+    "rasterio==1.5.2",
     "zarr[cast-value-rs]==3.2.0",
 ]
 

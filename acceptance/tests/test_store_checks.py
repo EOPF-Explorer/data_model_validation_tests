@@ -63,6 +63,18 @@ def test_w1_layout_without_transform_fails_st03_even_when_the_group_has_one(tmp_
     assert any("layout entry has no spatial:transform" in e for e in res["ST03"].evidence), res["ST03"].evidence
 
 
+def test_transforms_must_agree_with_the_group_bbox(tmp_path):
+    """titiler takes zooms from the transforms and bounds from spatial:bbox; consistently
+    wrong transforms would make the zoom oracle agree with titiler, so ST03 ties them."""
+    store = build(tmp_path / "s.zarr")
+    path = tmp_path / "s.zarr" / "measurements" / "zarr.json"
+    meta = json.loads(path.read_text())
+    meta["attributes"]["spatial:bbox"] = [-36.0, 34.0, -30.0, 36.0]  # 3x wider than the levels
+    path.write_text(json.dumps(meta))
+    res = run(store)
+    assert res["ST03"].status == FAIL and any("more than a pixel from the group's spatial:bbox" in e for e in res["ST03"].evidence)
+
+
 def test_c15_level_without_spatial_dimensions_fails_st03(tmp_path):
     """Found by running the real 0.12 app: a level that declares spatial without
     spatial:dimensions makes every tile from it 500 (KeyError in _get_variable)."""

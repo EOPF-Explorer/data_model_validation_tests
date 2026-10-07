@@ -116,6 +116,34 @@ def test_rg07_survives_a_naive_time_and_a_source_that_is_not_json(server, tmp_pa
     assert res.status == FAIL and any("JSONDecodeError" in e for e in res.evidence), res.evidence
 
 
+ORACLE = {"measurements": {"levels": [("measurements/r0", 9), ("measurements/r2", 5)], "range": (5, 9)}}
+
+
+def test_w7_rg04_reads_the_tilejson_body(server, tmp_path):
+    """7 Oct review (W7): RG04 checked the tilejson link's status only. Without the zoom
+    workaround the r0 link returns 200 with minzoom = maxzoom, and RG04, TI07 and RG05
+    all stayed PASS."""
+    state, base = server
+    item = item_for(base, build(tmp_path / "s.zarr"), now_iso(5))
+    assert {r.id: r for r in rg.rg04_rg05_links(Http(Budget(50)), item, CFG_RG, ORACLE)}["RG04"].status == PASS
+    state.zooms = (9, 9)
+    r = {r.id: r for r in rg.rg04_rg05_links(Http(Budget(50)), item, CFG_RG, ORACLE)}["RG04"]
+    assert r.status == FAIL and "don't cover the store's 5–9" in r.summary, r.summary
+
+
+def test_rg10_the_battery_tests_the_registered_link_form(server, tmp_path):
+    state, base = server
+    item = item_for(base, build(tmp_path / "s.zarr"), now_iso(5))
+    item["links"][2]["href"] += "&color_formula=gamma"
+    r = rg.rg10_link_form(item, CFG_RG)
+    assert r.status == PASS and any("color_formula" in e for e in r.evidence), r.evidence
+    # register_v1 fixed to the multiscales group while the config still renders r0: FAIL
+    fixed = {**CFG_RG, "render": {**CFG_RG["render"], "0.11": {"group": "/measurements", "extra": {"bidx": "1"}}}}
+    assert rg.rg10_link_form(item, fixed).status == FAIL
+    s1 = {"links": [{"rel": "xyz", "href": "https://x/raster/t.png?expression=%2Fascending%3Avv%3B%28%2Fascending%3Avv%29%2F%28%2Fascending%3Avh%29"}]}
+    assert rg.link_groups(s1["links"][0]["href"]) == {"/ascending"}
+
+
 def test_link_zoom_falls_back_when_the_tilejson_has_no_zooms(server):
     """Review: zooms = [None, None] is truthy, so `None + None` crashed RG04."""
     state, base = server

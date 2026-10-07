@@ -23,6 +23,39 @@ from .model import FAIL, PASS, SKIP, VOID, WARN, XFAIL, XPASS, Result
 
 TMS = "WebMercatorQuad"
 ASSET_ROUTE = "/collections/{collection_id}/items/{item_id}/assets/{asset_id}"
+MAX_TILES = 8  # TI03 renders one tile per pyramid level, at most this many
+
+
+def resolve_group(path: str, oracle: dict) -> tuple[str | None, str | None]:
+    """A render's group path → (multiscales group, level path or None); (None, None) if neither."""
+    path = path.strip("/")
+    if path in oracle:
+        return path, None
+    parent = path.rpartition("/")[0]
+    if isinstance(oracle.get(parent), dict) and path in dict(oracle[parent]["levels"]):
+        return parent, path
+    return None, None
+
+
+def expected_zooms(cfg: dict, api: str, oracle: dict | None):
+    """What the store says this endpoint's render should advertise: (range, group, level,
+    the level's zoom, every level's zoom), or the reason it can't say (a str)."""
+    if oracle is None:
+        return "no store metadata read"
+    spec = cfg["render"].get(api) or {}
+    if api == "0.11":
+        path = spec.get("group", "")
+    elif spec.get("route") == "asset":
+        path = (cfg.get("asset_group") or {}).get(spec.get("asset"), "")
+    else:
+        return "the 0.12 STAC item route takes its zooms from rio-tiler's STAC reader, not from the store"
+    g, level = resolve_group(path, oracle)
+    if g is None:
+        return f"render group {path!r} is not a configured multiscales group or one of its levels"
+    if isinstance(oracle[g], str):
+        return f"{g}: {oracle[g]}"
+    levels = dict(oracle[g]["levels"])
+    return oracle[g]["range"], g, level, levels.get(level), sorted(set(levels.values()))
 
 
 def urls(base: str, collection: str, item: str, render: dict, api: str, n_bands: int | None = None, item_extra: dict | None = None):
@@ -92,15 +125,17 @@ def api_fingerprint(openapi: dict) -> str:
 
 
 class TitilerBattery:
-    def __init__(self, http: Http, name: str, endpoint: dict, cfg: dict, item: str, center=None, footprint: dict | None = None):
+    def __init__(self, http: Http, name: str, endpoint: dict, cfg: dict, item: str, center=None, footprint: dict | None = None,
+                 zoom_oracle: dict | None = None):
         self.http, self.name, self.ep, self.cfg, self.item = http, name, endpoint, cfg, item
         self.base = endpoint["base"].rstrip("/")
         self.api = endpoint["api"]
         self.group = f"titiler:{name}"
         self.center = center
         self.footprint = footprint  # STAC item geometry, when the item was fetched
+        self.expected = expected_zooms(cfg, self.api, zoom_oracle)  # zooms.oracle(StoreContext)
         self.cache_headers: list[str] = []
-        self.tilejson: dict | None = None
+        self.tilejson: dict | None = None  # set when usable, even if TI02 fails on its zooms
 
     def get(self, url, params=None):
         """GET; a dropped connection becomes a 599 response, so the check fails instead of the run."""
@@ -157,20 +192,40 @@ class TitilerBattery:
         tj = r.json()
         lo, hi, b = tj.get("minzoom"), tj.get("maxzoom"), tj.get("bounds")
         probs = []
-        if not (isinstance(lo, int) and isinstance(hi, int) and lo <= hi):
+        zooms_ok = isinstance(lo, int) and isinstance(hi, int) and lo <= hi
+        if not zooms_ok:
             probs.append(f"minzoom={lo!r} maxzoom={hi!r}")
         if not (isinstance(b, list) and len(b) == 4 and -180 <= b[0] < b[2] <= 180 and -90 <= b[1] < b[3] <= 90):
             probs.append(f"bounds={b!r}")
-        elif self.footprint and not geo.contains(geo.bbox_polygon(b), *geo.interior_point(self.footprint)):
-            probs.append(f"bounds {b} do not contain the item footprint")
-        expect = (self.cfg.get("items", {}).get(self.item) or {}).get("zooms")
-        if expect and [lo, hi] != list(expect):
-            probs.append(f"zooms {lo}–{hi}, the item config expects {expect[0]}–{expect[1]}")
+        else:
+            if zooms_ok:  # usable: TI03/TI04/TI09 still run and add evidence when TI02 fails on content
+                self.tilejson = tj
+            if self.footprint and not geo.contains(geo.bbox_polygon(b), *geo.interior_point(self.footprint)):
+                probs.append(f"bounds {b} do not contain the item footprint")
+        ev = [f"minzoom={lo!r} maxzoom={hi!r} bounds={b!r}"]
+        exp = self.expected
+        if isinstance(exp, str):
+            ev.append(f"zoom range not checked: {exp}")
+        else:
+            (elo, ehi), g, level, level_z, all_z = exp
+            ev.append(f"store: {g} levels at zooms {all_z} → expected {elo}–{ehi}")
+            if zooms_ok and (lo, hi) != (elo, ehi):
+                if level and lo == hi == level_z:
+                    probs.append(f"minzoom = maxzoom = {hi}: the render reads level group {level}, not the multiscales group {g} (the store gives {elo}–{ehi})")
+                else:
+                    probs.append(f"zooms {lo}–{hi}, the store's multiscales give {elo}–{ehi}")
+        anchor = (self.cfg.get("items", {}).get(self.item) or {}).get("zooms")
+        if anchor and zooms_ok and [lo, hi] != list(anchor):
+            probs.append(f"zooms {lo}–{hi}, the item config expects {anchor[0]}–{anchor[1]}")
+        if anchor and not isinstance(exp, str) and list(exp[0]) != list(anchor):
+            probs.append(f"the store gives {exp[0][0]}–{exp[0][1]} but the item config anchors {anchor[0]}–{anchor[1]}")
         if probs:
-            return self.result("TI02", FAIL, "tilejson is incoherent: " + "; ".join(probs),
-                               [f"minzoom={lo!r} maxzoom={hi!r} bounds={b!r}", str(tj)[:300]], problems=probs)
-        self.tilejson = tj
-        return self.result("TI02", PASS, f"tilejson → 200 with no zoom params; zooms {lo}–{hi}", metrics={"minzoom": lo, "maxzoom": hi, "bounds": b})
+            return self.result("TI02", FAIL, "tilejson is incoherent: " + "; ".join(probs), ev + [str(tj)[:300]], problems=probs)
+        if isinstance(exp, str):  # never a silent PASS on an unchecked range
+            return self.result("TI02", WARN, f"tilejson → 200 with no zoom params; zooms {lo}–{hi}, not checked against the store", ev,
+                               metrics={"minzoom": lo, "maxzoom": hi, "bounds": b})
+        return self.result("TI02", PASS, f"tilejson → 200 with no zoom params; zooms {lo}–{hi}, as the store's multiscales give", ev,
+                           metrics={"minzoom": lo, "maxzoom": hi, "bounds": b})
 
     def _footprint(self) -> dict:
         return self.footprint or geo.bbox_polygon(self.tilejson["bounds"])
@@ -184,15 +239,22 @@ class TitilerBattery:
         return list(geo.interior_point(self._footprint()))
 
     def ti03_tiles(self) -> Result:
+        """One tile per pyramid level (each level's zoom from the store), so every resolution
+        is read; without the store, minzoom, middle and maxzoom of the tilejson."""
         if not self.tilejson:
-            return self.result("TI03", SKIP, "no tilejson (TI02 failed)")
+            return self.result("TI03", SKIP, "no usable tilejson (TI02)")
         lo, hi = self.tilejson["minzoom"], self.tilejson["maxzoom"]
         lon, lat = self._center()
         min_valid = float(self.cfg.get("min_valid", 0.25))
         min_distinct = int(self.cfg.get("min_distinct", 16))
         prefix, params = self._prefix(1)
         fails, rows, metrics = [], [], {}
-        zooms = sorted({lo, (lo + hi) // 2, hi})
+        per_level = not isinstance(self.expected, str)
+        zooms = self.expected[4] if per_level else sorted({lo, (lo + hi) // 2, hi})
+        if len(zooms) > MAX_TILES:
+            rows.append(f"{len(zooms)} levels; rendering {MAX_TILES} of them, spread from the coarsest to the finest")
+            zooms = sorted({zooms[round(i * (len(zooms) - 1) / (MAX_TILES - 1))] for i in range(MAX_TILES)})
+        exempt = zooms[0] if len(zooms) > 1 else None  # the coarsest tile is mostly outside the footprint
         for z in zooms:
             x, y = lonlat_to_tile(lon, lat, z)
             r = self.get(f"{prefix}/tiles/{TMS}/{z}/{x}/{y}.png", params)
@@ -203,14 +265,16 @@ class TitilerBattery:
             # Require valid pixels in proportion to the tile's share of the footprint; at
             # minzoom, where the tile is mostly outside it, only "not all nodata".
             cover = geo.coverage(self._footprint(), z, x, y)
-            want = 0.0 if z == lo < hi else min_valid * cover  # lo == hi: the only tile gets no exemption
+            want = 0.0 if z == exempt else min_valid * cover  # a single tile gets no exemption (W10)
             rows.append(f"z{z} {x}/{y}: {st['mode']} {st['size'][0]}x{st['size'][1]}, {st['valid']:.0%} valid ({cover:.0%} of the tile inside the footprint), {st['distinct']} distinct values, {len(r.content)} B, {r.elapsed.total_seconds():.2f} s")
             metrics[f"z{z}"] = {"valid": st["valid"], "coverage": cover, "distinct": st["distinct"], "seconds": r.elapsed.total_seconds()}
             if st["valid"] <= want:
                 fails.append(f"z{z} {x}/{y}: {st['valid']:.0%} valid pixels (want > {want:.0%})")
             elif st["distinct"] < min_distinct:
                 fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values (a constant render?)")
-        return self.result("TI03", FAIL if fails else PASS, fails[0] if fails else f"tiles at z{', z'.join(map(str, zooms))} decode with real pixels", fails + rows, metrics, problems=fails)
+        which = "one per pyramid level" if per_level else "tilejson min, mid, max"
+        return self.result("TI03", FAIL if fails else PASS, fails[0] if fails else f"tiles at z{', z'.join(map(str, zooms))} ({which}) decode with real pixels",
+                           fails + rows, metrics, problems=fails)
 
     def ti04_rgb(self) -> Result:
         if not self.tilejson or len(self.cfg["render"]["variables"]) < 3:
@@ -286,4 +350,5 @@ class TitilerBattery:
 
     @staticmethod
     def request_bound(cfg: dict, api: str) -> int:
-        return 10 + len([c for c in cfg.get("contract", []) if c["api"] == api])
+        # TI00 TI01 TI02 TI04 TI06 one each, TI03 up to MAX_TILES, TI07 one per contract row, 2 slack
+        return 7 + MAX_TILES + len([c for c in cfg.get("contract", []) if c["api"] == api])

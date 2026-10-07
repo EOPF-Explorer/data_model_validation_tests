@@ -55,6 +55,22 @@ def _resolution(transform) -> float | None:
         return None
 
 
+def _bounds_vs_bbox(transform, shape, bbox) -> str | None:
+    """titiler takes zooms from a level's transform and shape but tilejson bounds from the
+    group's spatial:bbox: they must describe the same extent, within one pixel of the level."""
+    try:
+        a, _, c, _, e, f = (float(v) for v in transform[:6])
+        h, w = shape[-2:]
+        west, south, east, north = (float(v) for v in bbox[:4])
+    except (TypeError, ValueError, IndexError):
+        return None  # missing pieces are reported by the presence checks
+    xs, ys = sorted((c, c + a * w)), sorted((f, f + e * h))
+    if abs(xs[0] - west) > abs(a) or abs(xs[1] - east) > abs(a) or abs(ys[0] - south) > abs(e) or abs(ys[1] - north) > abs(e):
+        return (f"spatial:transform × spatial:shape gives bounds [{xs[0]:.6g}, {ys[0]:.6g}, {xs[1]:.6g}, {ys[1]:.6g}], "
+                f"more than a pixel from the group's spatial:bbox {list(bbox)}: zooms and bounds would disagree")
+    return None
+
+
 class StoreContext:
     """Metadata read once and shared by the checks."""
 
@@ -167,6 +183,12 @@ def st03_multiscales(ctx: StoreContext) -> Result:
                 fails.append(f"{path}: declares spatial but has no spatial:dimensions; titiler-eopf 0.12 reads it unguarded (reader.py _get_variable), so tiles from this level return 500")
             if "spatial:shape" in entry and "spatial:shape" in la and list(entry["spatial:shape"]) != list(la["spatial:shape"]):
                 fails.append(f"{path}: layout spatial:shape {entry['spatial:shape']} != group {la['spatial:shape']}")
+            et, lt = entry.get("spatial:transform"), la.get("spatial:transform")
+            if et and lt and (len(et) != len(lt) or not np.allclose(et, lt, rtol=1e-9, atol=0)):
+                fails.append(f"{path}: layout spatial:transform {et} != group {lt}")
+            if problem := _bounds_vs_bbox(entry.get("spatial:transform") or la.get("spatial:transform"),
+                                          entry.get("spatial:shape") or la.get("spatial:shape"), a.get("spatial:bbox")):
+                fails.append(f"{path}: {problem}")
             shape = entry.get("spatial:shape") or la.get("spatial:shape")
             for name, meta in list(ctx.arrays(g, path).items())[:3]:
                 if shape and list(meta["shape"][-2:]) != list(shape):

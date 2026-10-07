@@ -4,7 +4,8 @@ Registered stage only. Reads the item once from the STAC API, then its own links
 """
 
 import datetime as dt
-from urllib.parse import urlsplit
+import re
+from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 
@@ -12,10 +13,26 @@ from . import geometry as geo
 from .budget import Http
 from .model import FAIL, PASS, SKIP, WARN, Result
 from .storeio import StoreReader
-from .titiler_checks import lonlat_to_tile, png_stats
+from .titiler_checks import lonlat_to_tile, png_stats, resolve_group, urls
 
 LINK_RELS = ("viewer", "tilejson", "xyz")
 REQUEST_BOUND = 13  # item + 3 links + thumbnail, each once more for RG05, RG07's source item, plus slack
+GROUP_TOKEN = re.compile(r"(/[^:;()\s]+):")  # "/measurements/r0:oa08_radiance", "(/ascending:vv)"
+
+
+def link_groups(href: str) -> set[str]:
+    """The zarr groups a 0.11 link reads, from `variables=/g:var` or the `/g:var` operands of `expression=`."""
+    return {g for k, v in parse_qsl(urlsplit(href).query) if k in ("variables", "expression") for g in GROUP_TOKEN.findall(v)}
+
+
+def _expected_range(links: dict, oracle: dict | None):
+    """The store's zoom range for the multiscales group the links read (zooms.oracle), if known."""
+    for href in links.values():
+        for g in sorted(link_groups(href)):
+            ms, _ = resolve_group(g, oracle or {})
+            if ms and isinstance(oracle[ms], dict):
+                return oracle[ms]["range"]
+    return None
 
 
 def fetch_item(http: Http, stac: str, collection: str, item: str) -> dict:
@@ -70,6 +87,24 @@ def rg08_hrefs(item: dict, store: str, cfg: dict) -> Result:
     return Result("RG08", "registration", FAIL if fails else PASS, fails[0] if fails else "asset hrefs point at this store's groups", fails + rows, problems=fails)
 
 
+def rg10_link_form(item: dict, cfg: dict) -> Result:
+    """The battery's 0.11 render must read the group the registered links read, or TI02/TI03
+    test a URL users never get. When register_v1 changes its link form, this fails until
+    the config follows. No requests."""
+    spec = (cfg.get("render") or {}).get("0.11")
+    hrefs = [link["href"] for link in item.get("links", []) if link.get("rel") in ("tilejson", "xyz")]
+    groups = set().union(*(link_groups(h) for h in hrefs)) if hrefs else set()
+    if not spec or not groups:
+        return Result("RG10", "registration", SKIP, "no 0.11 render in the config or no tilejson/xyz link with variables/expression")
+    sent = {k for k, _ in urls("", "", "", cfg["render"], "0.11")[1]} | set((cfg.get("items", {}).get(item.get("id")) or {}).get("render_extra") or {})
+    extra = sorted({k for h in hrefs for k, _ in parse_qsl(urlsplit(h).query)} - sent - {"expression", "minzoom", "maxzoom", "tilesize"})
+    ev = [f"registered tilejson/xyz links read {sorted(groups)}"] + ([f"link parameters the battery doesn't send: {extra}"] if extra else [])
+    if groups != {spec["group"]}:
+        problem = f"the registered links read {sorted(groups)} but the battery's 0.11 render reads {spec['group']!r}: update [render].\"0.11\" so TI02/TI03 test what users get"
+        return Result("RG10", "registration", FAIL, problem, ev, problems=[problem])
+    return Result("RG10", "registration", PASS, f"the battery's 0.11 render reads {spec['group']}, as the registered links do", ev)
+
+
 def rg07_fresh(item: dict, reader: StoreReader, http: Http) -> Result:
     """The item must be registered after the store was written: a failed registration
     leaves an older item in place while the store is new (6 Oct canary run 1).
@@ -103,8 +138,10 @@ def rg07_fresh(item: dict, reader: StoreReader, http: Http) -> Result:
     return Result("RG07", "registration", FAIL, f"the item predates its store by {-lag / 60:.0f} min: this registration is stale", ev)
 
 
-def _zoom_and_tile(http: Http, links: dict, footprint: dict, cfg: dict, item_id: str):
-    zooms = (cfg.get("items", {}).get(item_id) or {}).get("zooms")
+def _zoom_and_tile(http: Http, links: dict, footprint: dict, cfg: dict, item_id: str, expected=None):
+    """The tile to render: the middle of the store's zoom range, else the item config's,
+    else the tilejson link's (which carries the zoom workaround, 0–11, on OLCI)."""
+    zooms = list(expected) if expected else (cfg.get("items", {}).get(item_id) or {}).get("zooms")
     if not zooms and "tilejson" in links:
         r = http.get(links["tilejson"])
         if r.status_code == 200:
@@ -115,7 +152,20 @@ def _zoom_and_tile(http: Http, links: dict, footprint: dict, cfg: dict, item_id:
     return z, lonlat_to_tile(*geo.interior_point(footprint), z)
 
 
-def _check_link(http: Http, rel: str, href: str, ztile) -> tuple[int, str]:
+def _tilejson_problem(tj, expected, footprint) -> str | None:
+    """A 200 tilejson can still be unusable: the 0.11 r0 form without the zoom workaround
+    returns minzoom = maxzoom (W7, 7 Oct review)."""
+    lo, hi, b = (tj.get("minzoom"), tj.get("maxzoom"), tj.get("bounds")) if isinstance(tj, dict) else (None, None, None)
+    if not (isinstance(lo, int) and isinstance(hi, int) and lo <= hi):
+        return f"200 but minzoom={lo!r} maxzoom={hi!r}"
+    if expected and not (lo <= expected[0] and hi >= expected[1]):
+        return f"200 but it advertises zooms {lo}–{hi}, which don't cover the store's {expected[0]}–{expected[1]}: a map built from it can't reach every level"
+    if footprint and isinstance(b, list) and len(b) == 4 and not geo.contains(geo.bbox_polygon(b), *geo.interior_point(footprint)):
+        return f"200 but its bounds {b} do not contain the item footprint"
+    return None
+
+
+def _check_link(http: Http, rel: str, href: str, ztile, expected=None, footprint=None) -> tuple[int, str]:
     z, (x, y) = ztile
     url = href.replace("{z}", str(z)).replace("{x}", str(x)).replace("{y}", str(y))
     r = http.get(url)
@@ -128,10 +178,18 @@ def _check_link(http: Http, rel: str, href: str, ztile) -> tuple[int, str]:
         if st["valid"] == 0:
             return 0, "200 but no valid pixels"
         return 200, f"200, {st['valid']:.0%} valid"
+    if rel == "tilejson":
+        try:
+            tj = r.json()
+        except ValueError:
+            return 0, "200 but not JSON"
+        if problem := _tilejson_problem(tj, expected, footprint):
+            return 0, problem
+        return 200, f"200, zooms {tj['minzoom']}–{tj['maxzoom']}"
     return 200, "200"
 
 
-def rg04_rg05_links(http: Http, item: dict, cfg: dict) -> list[Result]:
+def rg04_rg05_links(http: Http, item: dict, cfg: dict, oracle: dict | None = None) -> list[Result]:
     links = {link["rel"]: link["href"] for link in item.get("links", []) if link.get("rel") in LINK_RELS}
     thumb = (item.get("assets", {}).get("thumbnail") or {}).get("href")
     if thumb:
@@ -139,21 +197,25 @@ def rg04_rg05_links(http: Http, item: dict, cfg: dict) -> list[Result]:
     if not links:
         return [Result("RG04", "registration", FAIL, "the item has no viewer/tilejson/xyz links or thumbnail")]
     footprint = item.get("geometry") or geo.bbox_polygon(item["bbox"])
-    ztile = _zoom_and_tile(http, links, footprint, cfg, item["id"])
+    expected = _expected_range(links, oracle)
+    ztile = _zoom_and_tile(http, links, footprint, cfg, item["id"], expected)
     rows4, fails4, rows5, warn5 = [], [], [], []
+    if expected:
+        rows4.append(f"store zoom range for the linked group: {expected[0]}–{expected[1]}")
     flip = cfg.get("flip") or {}
     for rel, href in sorted(links.items()):
-        code, note = _check_link(http, rel, href, ztile)
+        code, note = _check_link(http, rel, href, ztile, expected, footprint)
         host = urlsplit(href).path.split("/")[1] if urlsplit(href).path else ""
         rows4.append(f"{rel} (/{host}): {note}")
         if code != 200:
             fails4.append(f"{rel}: {note}")
         if flip and flip["from"] in href:
-            fcode, fnote = _check_link(http, rel, href.replace(flip["from"], flip["to"]), ztile)
+            fcode, fnote = _check_link(http, rel, href.replace(flip["from"], flip["to"]), ztile, expected, footprint)
             rows5.append(f"{rel} on {flip['to']}: {fnote}")
             if code == 200 and fcode != 200:
                 warn5.append(f"{rel} works on {flip['from']} but returns {fnote} on {flip['to']}: regenerate it before the flip")
-    out = [Result("RG04", "registration", FAIL if fails4 else PASS, fails4[0] if fails4 else f"{len(links)} item links render (tile z{ztile[0]})", fails4 + rows4)]
+    out = [Result("RG04", "registration", FAIL if fails4 else PASS, fails4[0] if fails4 else f"{len(links)} item links render (tile z{ztile[0]})",
+                  fails4 + rows4, problems=fails4)]
     if flip:
         out.append(Result("RG05", "registration", WARN if warn5 else PASS,
                           warn5[0] if warn5 else f"every link also works on {flip['to']}", warn5 + rows5))

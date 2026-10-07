@@ -21,9 +21,12 @@ import pytest
 pytest.importorskip("titiler.eopf")
 pytest.importorskip("uvicorn")
 
+from eopf_accept import zooms  # noqa: E402
 from eopf_accept.budget import Budget, Http  # noqa: E402
 from eopf_accept.model import FAIL, PASS  # noqa: E402
 from eopf_accept.reader_check import tr01_local_reader  # noqa: E402
+from eopf_accept.store_checks import StoreContext  # noqa: E402
+from eopf_accept.storeio import StoreReader  # noqa: E402
 from eopf_accept.titiler_checks import TitilerBattery  # noqa: E402
 
 from .geozarr_fixture import CFG, build  # noqa: E402
@@ -96,14 +99,18 @@ def titiler_012(tmp_path):
         log.close()
 
 
-def run_battery(base):
+def run_battery(base, store):
+    """With the zoom oracle from the store, as the CLI runs it: TI02 PASS then means the
+    oracle and the real app agree."""
+    oracle = zooms.oracle(StoreContext(StoreReader(store, Budget(500)), CFG))
     http = Http(Budget(100))
-    return {r.id: r for r in TitilerBattery(http, "local-0.12", {"base": base, "api": "0.12", "expect_version": "0.11.0"}, CFG, ITEM).run()}
+    ep = {"base": base, "api": "0.12", "expect_version": "0.11.0"}
+    return {r.id: r for r in TitilerBattery(http, "local-0.12", ep, CFG, ITEM, zoom_oracle=oracle).run()}
 
 
 def test_healthy_store_on_real_titiler_012(tmp_path, titiler_012):
     store = build(tmp_path / "s.zarr")
-    res = run_battery(titiler_012(store))
+    res = run_battery(titiler_012(store), store)
     for cid in ("TI00", "TI01", "TI02", "TI03", "TI04", "TI06"):
         assert res[cid].status == PASS, (cid, res[cid].summary, res[cid].evidence)
     assert tr01_local_reader(store, CFG).status == PASS
@@ -112,7 +119,7 @@ def test_healthy_store_on_real_titiler_012(tmp_path, titiler_012):
 def test_c1_reproduced_on_real_titiler_012(tmp_path, titiler_012):
     """No spatial:shape in the layout or the groups: the real app's tilejson must 500."""
     store = build(tmp_path / "s.zarr", layout_shape=False, group_shape=False)
-    res = run_battery(titiler_012(store))
+    res = run_battery(titiler_012(store), store)
     assert res["TI02"].status == FAIL and "500" in res["TI02"].summary, res["TI02"].summary
     tr = tr01_local_reader(store, CFG)
     assert tr.status == FAIL, tr.evidence
@@ -122,16 +129,16 @@ def test_w1_layout_without_transform_on_real_titiler_012(tmp_path, titiler_012):
     """Why ST03 FAILs a layout entry without spatial:transform (W1) but only WARNs one without
     spatial:shape: the real app 500s every tile in the first case and renders the second."""
     no_transform = build(tmp_path / "a.zarr", layout_transform=False)
-    res = run_battery(titiler_012(no_transform))
+    res = run_battery(titiler_012(no_transform), no_transform)
     assert res["TI03"].status == FAIL and "500" in res["TI03"].summary, res["TI03"].evidence
     no_shape = build(tmp_path / "b.zarr", layout_shape=False)
-    res = run_battery(titiler_012(no_shape))
+    res = run_battery(titiler_012(no_shape), no_shape)
     assert res["TI03"].status == PASS, res["TI03"].evidence
 
 
 def test_c15_reproduced_on_real_titiler_012(tmp_path, titiler_012):
     """No spatial:dimensions on the level groups: tilejson is fine, every tile 500s."""
     store = build(tmp_path / "s.zarr", level_dims=False)
-    res = run_battery(titiler_012(store))
+    res = run_battery(titiler_012(store), store)
     assert res["TI02"].status == PASS
     assert res["TI03"].status == FAIL, res["TI03"].evidence

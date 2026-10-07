@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import registration as rg
-from . import report
+from . import report, zooms
 from .budget import Budget, BudgetExceeded, Http
 from .model import FAIL, VOID, Result, apply_known_issues
 from .store_checks import CHECKS, REQUEST_BOUNDS, StoreContext
@@ -118,9 +118,15 @@ def main(argv: list[str] | None = None) -> int:
     center = [float(v) for v in args.center.split(",")] if args.center else None
 
     budget = Budget(args.max_requests)
+    # The store's metadata gives the store checks their nodes, and titiler and registration
+    # the zoom range the store implies (zooms.oracle), so it is read whenever any of them run.
+    needs_ctx = bool(groups & {"store", "titiler", "registration"})
+    if needs_ctx:
+        budget.reserve("store-metadata", REQUEST_BOUNDS["store-metadata"])
     if "store" in groups:
         for check_id, bound in REQUEST_BOUNDS.items():
-            budget.reserve(check_id, bound)
+            if check_id != "store-metadata":
+                budget.reserve(check_id, bound)
     if "registration" in groups:
         budget.reserve("registration", rg.REQUEST_BOUND)
     if "titiler" in groups:
@@ -161,8 +167,9 @@ def main(argv: list[str] | None = None) -> int:
     results: list[Result] = []
     reader = StoreReader(args.store, budget)
     try:
+        ctx = StoreContext(reader, cfg) if needs_ctx else None
+        oracle = zooms.oracle(ctx) if ctx else None
         if "store" in groups:
-            ctx = StoreContext(reader, cfg)
             results += [fn(ctx) for fn in CHECKS.values()]
         if "reader" in groups:
             from .reader_check import tr01_local_reader
@@ -172,11 +179,11 @@ def main(argv: list[str] | None = None) -> int:
         if "registration" in groups:
             item = rg.fetch_item(http, cfg["stac"], args.collection, args.item)
             footprint = item.get("geometry")
-            results += [rg.rg08_hrefs(item, args.store, cfg), rg.rg07_fresh(item, reader, http)]
-            results += rg.rg04_rg05_links(http, item, cfg)
+            results += [rg.rg08_hrefs(item, args.store, cfg), rg.rg07_fresh(item, reader, http), rg.rg10_link_form(item, cfg)]
+            results += rg.rg04_rg05_links(http, item, cfg, oracle)
         if "titiler" in groups:
             for name, ep in endpoints.items():
-                results += TitilerBattery(http, name, ep, cfg, args.item, center, footprint).run()
+                results += TitilerBattery(http, name, ep, cfg, args.item, center, footprint, oracle).run()
     except BudgetExceeded as exc:
         results.append(Result("BUDGET", "run", FAIL, f"stopped: {exc}"))
     except Exception as exc:  # keep the partial results; a crash is no verdict
