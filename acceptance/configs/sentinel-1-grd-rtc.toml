@@ -1,31 +1,45 @@
-# Sentinel-1 GRD RTC cubes. DRAFT. The layout is from data-pipeline
-# tests/fixtures/consolidate_zarr_groups/s1-rtc-32UPB (a staging cube's zarr.json, 30 Sep).
-# The URL forms and the value range are unverified: confirm them on the first run.
+# Sentinel-1 GRD RTC cubes: one store per MGRS tile, appended per acquisition.
+# Layout from data-pipeline tests/fixtures/consolidate_zarr_groups/s1-rtc-32UPB (c28af4f, a
+# staging cube read 30 Sep): orbit groups `ascending`/`descending`, each multiscales r10m … r720m,
+# vv/vh float32 (time, y, x). Render forms from the s1-rtc-32TQR cube item's own links (6 Oct).
+# First run against a real cube pending: confirm what's marked "unverified".
 collections = ["sentinel-1-grd-rtc", "sentinel-1-grd-rtc-staging", "sentinel-1-grd-rtc-acquisitions", "sentinel-1-grd-rtc-acquisitions-staging"]
 
 # A cube may have one or both orbit groups; a trailing "?" marks a group as optional.
 open_groups = ["ascending?", "descending?"]
-multiscales_groups = ["ascending?", "descending?"]   # r10m … r720m; vv/vh float32 (time, y, x)
+multiscales_groups = ["ascending?", "descending?"]
 min_levels = 2
 sample_variables = ["vv", "vh"]
 dtype_allow = ["float32", "uint16"]
 dtype_check_pattern = "^(vv|vh)$"
-min_valid = 0.25
+min_valid = 0.25   # unverified for S1: a slice may cover part of its tile (TI03 scales by footprint)
 min_distinct = 16
 
 stac = "https://api.explorer.eopf.copernicus.eu/stac"
 flip = { from = "/raster/", to = "/rstaging/" }    # RG05: does each item link also work on 0.12?
+# RG08 on the cube item (sentinel-1-grd-rtc-staging), which carries all four. A per-acquisition
+# item carries one orbit's pair only.
+asset_group = { gamma0-rtc-backscatter-asc = "ascending", gamma0-rtc-backscatter-desc = "descending", border-mask-asc = "ascending", border-mask-desc = "descending" }
 
-[consumers.openlayers]   # S1 asset media types not confirmed; add consumers if they are profile=multiscales
+# The orbit-group assets are typed `application/vnd.zarr; version=3` (no profile=multiscales), so
+# eodash draws S1 from the item's xyz/tilejson links (RG04/RG05), not with OpenLayers GeoZarr.
+[consumers.openlayers]
 
 [render]
-variables = ["vv"]
-rescale = ["0,0.5"]
-"0.12" = { route = "asset", asset = "ascending", extra = { bidx = "1" } }   # the item route ignores bidx/sel → 500
-"0.11" = { group = "/ascending" }
+# The registered links render `expression=/<orbit>:vv;/<orbit>:vh;vv/vh` (3 bands). The battery
+# renders vv and vh as variables (2 bands: TI04 RGB skips); RG04 renders the registered expression.
+variables = ["vv", "vh"]
+rescale = ["0,0.4", "0,0.1"]
+"0.12" = { route = "asset", asset = "gamma0-rtc-backscatter-asc", extra = { bidx = "1" } }   # unverified on /rstaging; the item route ignores bidx/sel → 500
+"0.11" = { group = "/ascending", extra = { bidx = "1" } }   # the registered link form, minus the expression
 
 [endpoints]
 # `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs 0.12
-# code (sha-5fbea81) but reports 0.11.0: its pyproject predates the 0.12.0 bump. Confirm on the first run.
+# code (sha-5fbea81) but reports 0.11.0: its pyproject predates the 0.12.0 bump (confirmed live 6 Oct).
 rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.11.0" }
 raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11", expect_version = "0.11.1" }
+
+# Baseline before data-model#292 (chosen 6 Oct): the Venice lagoon tile, 11 slices 23 Jun – 13 Jul
+# 2026, both orbits. `sel` is the slice the cube item's own links render (latest ascending).
+[items."s1-rtc-32TQR"]
+render_extra = { sel = "time=2026-07-07T17:05:31" }

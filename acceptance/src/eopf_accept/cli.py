@@ -133,7 +133,8 @@ def main(argv: list[str] | None = None) -> int:
         if urlparse(args.store).hostname in PRODUCTION_HOSTS:
             print(GATEWAY_NOTE)
         for name, ep in endpoints.items() if "titiler" in groups else []:
-            prefix, params = urls(ep["base"], args.collection, args.item or "<item>", cfg["render"], ep["api"])
+            item_extra = (cfg.get("items", {}).get(args.item) or {}).get("render_extra")
+            prefix, params = urls(ep["base"], args.collection, args.item or "<item>", cfg["render"], ep["api"], item_extra=item_extra)
             print(f"endpoint {name} (api {ep['api']}, reports {ep['expect_version']}): {prefix}/WebMercatorQuad/tilejson.json?" + "&".join(f"{k}={v}" for k, v in params))
         print("request upper bound: " + ", ".join(f"{k}={v}" for k, v in sorted(budget.planned.items())) + f" → {sum(budget.planned.values())} of --max-requests {budget.max}")
         if "titiler" in groups or "registration" in groups:

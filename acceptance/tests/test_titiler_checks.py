@@ -83,6 +83,15 @@ def test_zoom_mismatch_shows_the_zooms_and_a_known_issue_is_scoped_to_its_endpoi
     apply_known_issues([both], known, dt.date(2026, 10, 6))
     assert both.status == FAIL
 
+def test_item_render_extra_reaches_every_render(server):
+    """An S1 cube renders one time slice: the item config's `sel` must ride on every titiler request."""
+    state, base = server
+    cfg = {**CFG, "items": {ITEM: {"render_extra": {"sel": "time=2026-07-07T17:05:31"}}}}
+    TitilerBattery(Http(Budget(100)), "fake", {"base": base, **RSTAGING}, cfg, ITEM).run()
+    renders = [p for p in state.requests if "/tiles/" in p or "tilejson.json" in p]
+    assert renders and all("sel=time%3D2026-07-07T17%3A05%3A31" in p for p in renders), renders[:2]
+
+
 def test_c1_tilejson_500_fails_ti02(server):
     state, base = server
     state.tilejson_status = 500

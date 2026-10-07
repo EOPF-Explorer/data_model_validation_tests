@@ -25,8 +25,9 @@ TMS = "WebMercatorQuad"
 ASSET_ROUTE = "/collections/{collection_id}/items/{item_id}/assets/{asset_id}"
 
 
-def urls(base: str, collection: str, item: str, render: dict, api: str, n_bands: int | None = None):
-    """(path prefix, query params) for a render on this API generation."""
+def urls(base: str, collection: str, item: str, render: dict, api: str, n_bands: int | None = None, item_extra: dict | None = None):
+    """(path prefix, query params) for a render on this API generation. `item_extra` is the
+    item config's `render_extra`, e.g. an S1 cube's `sel = "time=…"`, added after the spec's."""
     spec = render.get(api)
     if spec is None:
         raise KeyError(f"no render spec for titiler API {api} in the collection config")
@@ -44,7 +45,7 @@ def urls(base: str, collection: str, item: str, render: dict, api: str, n_bands:
         prefix = item_prefix
         params.append(("assets", f"{spec['asset']}|bands={','.join(variables)}"))
     params += [("rescale", r) for r in rescale]
-    params += [(k, str(val)) for k, val in (spec.get("extra") or {}).items()]
+    params += [(k, str(val)) for k, val in {**(spec.get("extra") or {}), **(item_extra or {})}.items()]
     return prefix, params
 
 
@@ -138,7 +139,8 @@ class TitilerBattery:
         return self.result("TI00", PASS, f"reports {got}; routes match the {fp} API")
 
     def _prefix(self, n_bands=None):
-        return urls(self.base, self.cfg["collection"], self.item, self.cfg["render"], self.api, n_bands)
+        item_extra = (self.cfg.get("items", {}).get(self.item) or {}).get("render_extra")
+        return urls(self.base, self.cfg["collection"], self.item, self.cfg["render"], self.api, n_bands, item_extra)
 
     def ti01_info(self) -> Result:
         prefix, params = self._prefix()
