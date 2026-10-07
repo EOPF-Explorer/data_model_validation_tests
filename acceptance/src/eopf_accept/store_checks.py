@@ -74,13 +74,15 @@ def _bounds_vs_bbox(transform, shape, bbox) -> str | None:
 class StoreContext:
     """Metadata read once and shared by the checks."""
 
-    def __init__(self, reader: StoreReader, cfg: dict):
+    def __init__(self, reader: StoreReader, cfg: dict, item: str | None = None):
         self.reader, self.cfg = reader, cfg
         self.root = reader.node("")
         self.nodes: dict[str, dict | None] = {"": self.root}
         # A trailing "?" marks a group as optional (an S1 cube may have one orbit only).
         # Absent optional groups are dropped; if every listed group is optional and
-        # absent, ST01 fails, because then there is nothing to open.
+        # absent, ST01 fails, because then there is nothing to open. An item can declare
+        # which groups it has (`items."<id>".groups`); ST01 then requires exactly those.
+        self.expected_groups: list[str] | None = (cfg.get("items", {}).get(item) or {}).get("groups") if item else None
         self.absent_optional: list[str] = []
         names = [g.rstrip("?") for g in cfg.get("open_groups", []) + cfg.get("multiscales_groups", [])]
         optional = {g.rstrip("?") for g in cfg.get("open_groups", []) + cfg.get("multiscales_groups", []) if g.endswith("?")}
@@ -117,6 +119,10 @@ def st01_consolidated(ctx: StoreContext) -> Result:
     fails, warns = [], []
     if not ctx.open_groups:
         fails.append(f"no group to open: every configured group is absent ({ctx.absent_optional})")
+    if ctx.expected_groups is not None:
+        present = set(ctx.open_groups) | set(ctx.ms_groups)
+        fails += [f"{g}: the item config expects this group, the store doesn't have it" for g in ctx.expected_groups if g not in present]
+        fails += [f"{g}: present, but the item config's groups {ctx.expected_groups} don't list it" for g in sorted(present - set(ctx.expected_groups))]
     for g in dict.fromkeys(["", *ctx.open_groups, *ctx.ms_groups]):
         node = ctx.nodes.get(g)
         label = g or "/"
@@ -134,11 +140,12 @@ def st01_consolidated(ctx: StoreContext) -> Result:
                 warns.append(f"{path}: no consolidated_metadata (level group)")
             if cm is not None and asset not in cm:
                 fails.append(f"{g}: consolidated metadata does not list level {asset!r}")
+    rows = [f"optional group(s) absent: {ctx.absent_optional}"] if ctx.absent_optional else []
     if fails:
-        return Result("ST01", "store", FAIL, f"{len(fails)} group(s) not consolidated or incomplete", fails + warns)
+        return Result("ST01", "store", FAIL, f"{len(fails)} group(s) missing, not consolidated or incomplete", fails + warns + rows, problems=fails)
     if warns:
-        return Result("ST01", "store", WARN, f"{len(warns)} level group(s) without their own consolidated metadata", warns)
-    return Result("ST01", "store", PASS, "root, opened and multiscales groups are consolidated")
+        return Result("ST01", "store", WARN, f"{len(warns)} level group(s) without their own consolidated metadata", warns + rows)
+    return Result("ST01", "store", PASS, "root, opened and multiscales groups are consolidated", rows)
 
 
 def st03_multiscales(ctx: StoreContext) -> Result:
@@ -204,33 +211,44 @@ def st03_multiscales(ctx: StoreContext) -> Result:
 
 
 def _all_nodes(ctx: StoreContext) -> list[tuple[str, dict | None]]:
+    """The configured groups and their levels and arrays (the floor: never derived from the
+    tree, see the module docstring), plus every other node the root's consolidated metadata
+    lists, so groups outside the config (S1 `<orbit>/conditions`) are checked too (W13)."""
     nodes = [(g or "/", ctx.nodes[g]) for g in ctx.nodes]
     for g, levels in ctx.levels.items():
         for _, path, node in levels:
             nodes.append((path, node))
             nodes += [(f"{path}/{n}", m) for n, m in ctx.arrays(g, path).items()]
+    seen = {p for p, _ in nodes}
+    nodes += [(p, m) for p, m in sorted((_consolidated(ctx.root) or {}).items()) if p not in seen]
     return nodes
 
 
 def st04_visibility(ctx: StoreContext) -> Result:
-    """titiler-eopf 0.12 sees a group only through its declared conventions (C4: `scl`)."""
-    fails = []
+    """Two rules, both FAIL: (1) no node uses spatial:/proj: keys without declaring them in
+    zarr_conventions (the zarr-conventions spec forbids implicit conventions); (2) every group
+    meant to render is visible to titiler-eopf 0.12, which sees a group only through its
+    declared conventions (C4: `scl`)."""
+    implicit, invisible = [], []
     for path, node in _all_nodes(ctx):
         a = _attrs(node)
-        undeclared = [cv.NAME[u] for u in cv.used(a) - cv.declared(a)]
-        if undeclared and node and node.get("node_type") == "group":
-            fails.append(f"{path}: uses {undeclared} keys without declaring them in zarr_conventions")
+        undeclared = sorted(cv.NAME[u] for u in cv.used(a) - cv.declared(a))
+        if undeclared and node:
+            implicit.append(f"{path}: implicit conventions: uses {undeclared} keys without declaring them in zarr_conventions")
     for g in dict.fromkeys(ctx.open_groups + list(ctx.cfg.get("visible_groups", []))):
         node = ctx.nodes.get(g) or ctx.reader.node(g)
         if node is None:
-            fails.append(f"{g}: no zarr.json")
+            invisible.append(f"{g}: no zarr.json")
             continue
         arrays = [m.get("attributes") or {} for m in (_consolidated(node) or {}).values() if m.get("node_type") == "array"]
         if not cv.titiler_visible(_attrs(node), arrays):
-            fails.append(f"{g}: invisible to titiler-eopf 0.12 (_get_groups needs spatial+proj declared on the group, or on an array of a group without conventions)")
+            invisible.append(f"{g}: invisible to titiler-eopf 0.12 (_get_groups needs spatial+proj declared on the group, or on an array of a group without conventions)")
+    fails = invisible + implicit
     if fails:
-        return Result("ST04", "store", FAIL, f"{len(fails)} visibility problem(s)", fails[:40] + ([f"... {len(fails) - 40} more"] if len(fails) > 40 else []))
-    return Result("ST04", "store", PASS, "every group meant to render is visible to titiler-eopf 0.12")
+        parts = ([f"{len(invisible)} group(s) invisible to titiler-eopf 0.12"] if invisible else []) + \
+                ([f"{len(implicit)} node(s) with implicit conventions (spatial:/proj: keys not declared)"] if implicit else [])
+        return Result("ST04", "store", FAIL, "; ".join(parts), fails[:40] + ([f"... {len(fails) - 40} more"] if len(fails) > 40 else []), problems=fails)
+    return Result("ST04", "store", PASS, "conventions declared wherever used; every group meant to render is visible to titiler-eopf 0.12")
 
 
 def st11_declarations(ctx: StoreContext) -> Result:

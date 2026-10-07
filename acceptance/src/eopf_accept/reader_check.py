@@ -10,7 +10,8 @@ from .model import FAIL, PASS, SKIP, VOID, Result
 from .titiler_checks import lonlat_to_tile
 
 
-def tr01_local_reader(store_url: str, cfg: dict, center=None) -> Result:
+def tr01_local_reader(store_url: str, cfg: dict, center=None, absent_optional=()) -> Result:
+    """`absent_optional`: StoreContext.absent_optional, the "?" groups this store doesn't have."""
     if store_url.startswith(("http://", "https://")):
         return Result("TR01", "reader", SKIP, "the local reader runs on scratch stores only (s3:// or a local path)")
     try:
@@ -19,7 +20,10 @@ def tr01_local_reader(store_url: str, cfg: dict, center=None) -> Result:
         return Result("TR01", "reader", VOID, "titiler-eopf not installed: run `uv sync --extra reader`, or drop `reader` from --groups")
     rows, fails, metrics = [], [], {}
     variables = cfg["render"]["variables"]
-    for group in cfg.get("open_groups", []):
+    for group in [g.rstrip("?") for g in cfg.get("open_groups", [])]:
+        if group in absent_optional:
+            rows.append(f"{group}: optional and absent from this store, not opened")
+            continue
         url = f"{store_url.rstrip('/')}/{group}"
         t0 = time.perf_counter()
         try:

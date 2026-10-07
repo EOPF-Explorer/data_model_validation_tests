@@ -169,6 +169,58 @@ def test_optional_groups_absent_fail_only_when_none_exist(tmp_path):
     assert run(path, cfg)["ST01"].status == FAIL
 
 
+def test_w13_st04_covers_groups_outside_the_config(tmp_path):
+    """7 Oct review (W13): the 30 Sep S1 snapshot has `<orbit>/conditions` using proj:/spatial:
+    with no zarr_conventions, and ST04 never looked there (only configured groups)."""
+    import zarr
+
+    store = build(tmp_path / "s.zarr")
+    zarr.open_group(store, mode="a").create_group("conditions", attributes={"proj:code": "EPSG:4326", "spatial:bbox": [-36, 34, -34, 36]})
+    zarr.consolidate_metadata(store)
+    res = run(store)
+    assert res["ST04"].status == FAIL and "1 node(s) with implicit conventions" in res["ST04"].summary, res["ST04"].summary
+    assert res["ST04"].problems == ["conditions: implicit conventions: uses ['proj', 'spatial'] keys without declaring them in zarr_conventions"]
+
+
+def test_w5_declared_item_groups_and_optional_groups(tmp_path):
+    """A single-orbit S1 cube: the item config says which groups it has; ST01 requires exactly those."""
+    store = build(tmp_path / "s.zarr")
+    cfg = copy.deepcopy(CFG) | {"open_groups": ["measurements", "other?"], "multiscales_groups": ["measurements", "other?"],
+                                "items": {"I": {"groups": ["measurements"]}, "J": {"groups": ["other"]}}}
+
+    def st01(item):
+        return CHECKS["ST01"](StoreContext(StoreReader(store, Budget(500)), cfg, item))
+
+    ok = st01("I")
+    assert ok.status == PASS and "optional group(s) absent: ['other']" in ok.evidence, ok.evidence
+    bad = st01("J")
+    assert bad.status == FAIL and any("expects this group" in p for p in bad.problems) and any("don't list it" in p for p in bad.problems)
+
+
+def test_w5_rg08_requires_only_the_declared_groups_assets(tmp_path):
+    from eopf_accept import registration as rg
+
+    store = build(tmp_path / "s.zarr")
+    cfg = copy.deepcopy(CFG) | {"open_groups": ["measurements", "other?"], "multiscales_groups": ["measurements", "other?"],
+                                "asset_group": {"radianceData": "measurements", "otherData": "other"}, "items": {"I": {"groups": ["measurements"]}}}
+    item = {"id": "I", "links": [], "assets": {"radianceData": {"href": f"{store}/measurements"}}}
+    assert rg.rg08_hrefs(item, store, cfg, StoreContext(StoreReader(store, Budget(500)), cfg, "I")).status == PASS
+    assert rg.rg08_hrefs(item, store, cfg).status == FAIL  # no declaration: every asset is required
+    item["assets"]["otherData"] = {"href": f"{store}/other"}  # an href to a group the store doesn't have
+    r = rg.rg08_hrefs(item, store, cfg, StoreContext(StoreReader(store, Budget(500)), cfg, "I"))
+    assert r.status == FAIL and "the store has no group 'other'" in r.summary
+
+
+def test_w5_tr01_skips_absent_optional_groups(tmp_path):
+    pytest.importorskip("titiler.eopf")
+    from eopf_accept.reader_check import tr01_local_reader
+
+    store = build(tmp_path / "s.zarr")
+    cfg = copy.deepcopy(CFG) | {"open_groups": ["measurements", "other?"]}
+    r = tr01_local_reader(store, cfg, absent_optional=["other"])
+    assert r.status == PASS and any("optional and absent" in e for e in r.evidence), r.evidence
+
+
 def test_store_reads_spend_the_budget(tmp_path):
     from eopf_accept.budget import BudgetExceeded
 

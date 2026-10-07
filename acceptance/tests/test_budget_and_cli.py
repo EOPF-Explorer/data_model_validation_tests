@@ -72,6 +72,20 @@ def test_cli_plan_sends_nothing_and_refuses_over_budget(capsys):
     assert "REFUSED" in capsys.readouterr().out
 
 
+def test_w5_an_item_can_render_the_orbit_it_has(tmp_path, capsys):
+    """7 Oct review (W5): the battery hard-wired /ascending, so a descending-only cube was
+    tested on a group it doesn't have."""
+    text = (cli.CONFIG_DIR / "sentinel-1-grd-rtc.toml").read_text() + (
+        '\n[items."s1-rtc-DESC"]\ngroups = ["descending"]\n'
+        'render = { "0.11" = { group = "/descending", extra = { bidx = "1" } }, '
+        '"0.12" = { route = "asset", asset = "gamma0-rtc-backscatter-desc", extra = { bidx = "1" } } }\n')
+    (tmp_path / "s1.toml").write_text(text)
+    cli.main(["plan", "--collection", "sentinel-1-grd-rtc-staging", "--config", str(tmp_path / "s1.toml"), "--store", "s3://b/x.zarr",
+              "--item", "s1-rtc-DESC", "--stage", "registered", "--endpoint", "rstaging", "--endpoint", "raster"])
+    out = capsys.readouterr().out
+    assert "variables=/descending:vv" in out and "/assets/gamma0-rtc-backscatter-desc/" in out and "/ascending" not in out
+
+
 def test_no_endpoint_means_no_titiler_traffic(capsys):
     cli.main(["plan", "--collection", "sentinel-3-olci-l1-efr-staging", "--store", "s3://b/x.zarr", "--stage", "scratch"])
     out = capsys.readouterr().out

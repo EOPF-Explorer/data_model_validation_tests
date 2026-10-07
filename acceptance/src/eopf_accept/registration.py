@@ -65,21 +65,29 @@ def bucket_key(url: str) -> str:
     return url.rstrip("/")
 
 
-def rg08_hrefs(item: dict, store: str, cfg: dict) -> Result:
+def rg08_hrefs(item: dict, store: str, cfg: dict, ctx=None) -> Result:
     """Each configured asset points exactly at its group of THIS store (C9: a failed
-    registration leaves the previous item, whose hrefs still point at the old layout)."""
+    registration leaves the previous item, whose hrefs still point at the old layout), and
+    that group exists (from the StoreContext already read, no extra request). When the item
+    config declares its groups (a single-orbit S1 cube), only their assets are required."""
     root = bucket_key(store)
     fails, rows = [], []
     store_link = next((link["href"] for link in item.get("links", []) if link.get("rel") == "store"), None)
     if store_link and bucket_key(store_link) != root:
         fails.append(f"item `store` link {store_link} is not the store under test {store}")
+    declared = ctx.expected_groups if ctx is not None else None
     for asset, group in (cfg.get("asset_group") or {}).items():
         href = (item.get("assets", {}).get(asset) or {}).get("href")
         want = f"{root}/{group}"
         if href is None:
-            fails.append(f"asset {asset!r} missing")
+            if declared is None or group in declared:
+                fails.append(f"asset {asset!r} missing")
+            else:
+                rows.append(f"asset {asset!r} absent; its group {group!r} isn't in the item config's groups")
         elif bucket_key(href) != want:
             fails.append(f"asset {asset!r} → {href}, want {want}")
+        elif ctx is not None and (group in ctx.absent_optional or (ctx.nodes.get(group) or ctx.reader.node(group)) is None):
+            fails.append(f"asset {asset!r} → {href}, but the store has no group {group!r}")
         else:
             rows.append(f"asset {asset!r} → {href}")
     if not cfg.get("asset_group"):

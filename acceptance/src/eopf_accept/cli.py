@@ -100,6 +100,8 @@ def guard_stage(args, endpoints: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     cfg = load_config(args.collection, args.config, args.config_dir)
+    if item_render := (cfg.get("items", {}).get(args.item) or {}).get("render"):
+        cfg["render"] = {**cfg["render"], **item_render}  # e.g. a descending-only S1 cube renders /descending
     endpoints = parse_endpoints(args.endpoint, cfg)
     groups = set(args.groups.split(","))
     if unknown := groups - set(GROUPS):
@@ -120,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     budget = Budget(args.max_requests)
     # The store's metadata gives the store checks their nodes, and titiler and registration
     # the zoom range the store implies (zooms.oracle), so it is read whenever any of them run.
-    needs_ctx = bool(groups & {"store", "titiler", "registration"})
+    needs_ctx = bool(groups & {"store", "titiler", "registration", "reader"})
     if needs_ctx:
         budget.reserve("store-metadata", REQUEST_BOUNDS["store-metadata"])
     if "store" in groups:
@@ -167,19 +169,19 @@ def main(argv: list[str] | None = None) -> int:
     results: list[Result] = []
     reader = StoreReader(args.store, budget)
     try:
-        ctx = StoreContext(reader, cfg) if needs_ctx else None
+        ctx = StoreContext(reader, cfg, args.item) if needs_ctx else None
         oracle = zooms.oracle(ctx) if ctx else None
         if "store" in groups:
             results += [fn(ctx) for fn in CHECKS.values()]
         if "reader" in groups:
             from .reader_check import tr01_local_reader
 
-            results.append(tr01_local_reader(args.store, cfg, center))
+            results.append(tr01_local_reader(args.store, cfg, center, ctx.absent_optional))
         item = footprint = None
         if "registration" in groups:
             item = rg.fetch_item(http, cfg["stac"], args.collection, args.item)
             footprint = item.get("geometry")
-            results += [rg.rg08_hrefs(item, args.store, cfg), rg.rg07_fresh(item, reader, http), rg.rg10_link_form(item, cfg)]
+            results += [rg.rg08_hrefs(item, args.store, cfg, ctx), rg.rg07_fresh(item, reader, http), rg.rg10_link_form(item, cfg)]
             results += rg.rg04_rg05_links(http, item, cfg, oracle)
         if "titiler" in groups:
             for name, ep in endpoints.items():

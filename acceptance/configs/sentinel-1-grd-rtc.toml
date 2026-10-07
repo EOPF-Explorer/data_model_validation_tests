@@ -44,5 +44,10 @@ raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11"
 
 # Baseline before data-model#292 (chosen 6 Oct): the Venice lagoon tile, 11 slices 23 Jun – 13 Jul
 # 2026, both orbits. `sel` is the slice the cube item's own links render (latest ascending).
+# A single-orbit cube: declare its groups (ST01 requires exactly those, RG08 only their assets)
+# and render the orbit it has, e.g.
+#   [items."s1-rtc-XXXXX"]
+#   groups = ["descending"]
+#   render = { "0.11" = { group = "/descending", extra = { bidx = "1" } }, "0.12" = { route = "asset", asset = "gamma0-rtc-backscatter-desc", extra = { bidx = "1" } } }
 [items."s1-rtc-32TQR"]
 render_extra = { sel = "time=2026-07-07T17:05:31" }
