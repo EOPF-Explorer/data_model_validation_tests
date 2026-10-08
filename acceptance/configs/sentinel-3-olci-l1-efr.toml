@@ -108,4 +108,6 @@ check = "TI02"
 group = "titiler:raster"
 match = "the render reads level group measurements/r0, not the multiscales group measurements"
 ref = "register_v1 rc8 links /measurements/r0 on the 0.11 API; superseded by the titiler-eopf >0.12 flip"
-until = "2026-10-31"  # the flip date (assumed 7 Oct; set the real one). After it, a FAIL again
+# A review date, not the flip date (unset on 8 Oct: confirmed when everything is ready to
+# flip). After it this is a FAIL again: extend it if the flip isn't ready, drop it once flipped.
+until = "2026-10-31"
