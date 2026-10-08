@@ -4,13 +4,20 @@
 AWS_* environment variables), an `https://` gateway URL, or a local path. Every
 request spends the run's budget. Writes are impossible: there is no write path here,
 and zarr opens everything with `read_only=True`.
+
+An unsigned reader (an http(s) store, or s3:// with AWS_SKIP_SIGNATURE) counts a 403
+as "no such key": a public bucket without list rights answers 403 for a missing key
+(EODC's CI bucket does), and no credentials were sent that could have been refused.
+A signed reader still raises on 403, so a real permission problem stays loud.
 """
 
 import json
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 
 import obstore
+from obstore.exceptions import PermissionDeniedError
 from obstore.store import from_url
 from zarr.storage import ObjectStore
 
@@ -28,6 +35,19 @@ class StoreReader:
         self.url = normalize(url)
         self.budget = budget
         self._stores: dict[str, object] = {}
+        scheme = urlparse(self.url).scheme
+        self.unsigned = scheme in ("http", "https") or (
+            scheme == "s3" and os.environ.get("AWS_SKIP_SIGNATURE", "").lower() in ("1", "true", "yes", "on"))
+        self.absent = (FileNotFoundError, PermissionDeniedError) if self.unsigned else (FileNotFoundError,)
+
+    def access(self) -> str:
+        """Where reads go and how they are signed, for `plan` and the report: an s3:// store
+        follows AWS_ENDPOINT_URL[_S3], which a shell may still hold from another run."""
+        scheme = urlparse(self.url).scheme
+        if scheme == "s3":
+            endpoint = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL") or "the AWS default endpoint"
+            return f"s3 via {endpoint}, {'unsigned' if self.unsigned else 'signed with the AWS_* credentials'}"
+        return "local path" if scheme == "file" else f"{scheme}, unsigned"
 
     def _store(self, prefix: str = ""):
         root = f"{self.url}/{prefix}".rstrip("/") if prefix else self.url
@@ -43,7 +63,7 @@ class StoreReader:
         self.budget.take()
         try:
             data = bytes(obstore.get(self._store(), path).bytes())
-        except FileNotFoundError:
+        except self.absent:
             return None
         return json.loads(data)
 
@@ -55,7 +75,7 @@ class StoreReader:
         self.budget.take()
         try:
             return obstore.head(self._store(), path)
-        except FileNotFoundError:
+        except self.absent:
             return None
 
     def head_size(self, path: str) -> int | None:
@@ -86,7 +106,10 @@ class BudgetedObjectStore(ObjectStore):
 
     async def get(self, key, prototype, byte_range=None):
         self._budget.take()
-        return await super().get(key, prototype, byte_range)
+        try:
+            return await super().get(key, prototype, byte_range)
+        except self._reader.absent:  # zarr's wrapper only maps FileNotFoundError to "missing"
+            return None
 
     async def get_partial_values(self, prototype, key_ranges):
         key_ranges = list(key_ranges)

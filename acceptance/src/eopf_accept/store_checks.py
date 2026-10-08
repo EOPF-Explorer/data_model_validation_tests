@@ -157,6 +157,8 @@ def st01_consolidated(ctx: StoreContext) -> Result:
 
 def st03_multiscales(ctx: StoreContext) -> Result:
     """Emulates what titiler-eopf 0.12 needs for tilejson without zoom params (C1)."""
+    if not ctx.ms_groups:  # a config listing none: nothing was checked, so no PASS
+        return Result("ST03", "store", SKIP, "no multiscales group to check (the config lists none, or every listed one is absent)")
     fails, warns = [], []
     min_levels = int(ctx.cfg.get("min_levels", 2))
     for g in ctx.ms_groups:
@@ -324,6 +326,8 @@ def st07_chunk_layout(ctx: StoreContext) -> Result:
             if n_inner == 1 and chunk_mb > 64:
                 warns.append(f"{path}/{name}: single-chunk level decodes {chunk_mb:.0f} MB per read")
             rows.append(row)
+    if not rows:
+        return Result("ST07", "store", SKIP, "no multiscales level with a data array to measure", warns)
     status = FAIL if fails else WARN if warns else PASS
     summary = (f"{len(fails)} OpenLayers tile-size problem(s)" if fails else
                "layout OK" + ("" if consumers else " (no OpenLayers consumers configured)"))
@@ -342,6 +346,8 @@ def _center_chunk_key(meta: dict) -> str:
 
 
 def st08_dtype_and_compression(ctx: StoreContext) -> Result:
+    if not any(ctx.levels.values()):
+        return Result("ST08", "store", SKIP, "no multiscales level to check")
     allow = set(ctx.cfg.get("dtype_allow", []))
     pattern = re.compile(ctx.cfg.get("dtype_check_pattern", ".*"))
     fails, warns, rows = [], [], []
@@ -406,7 +412,9 @@ def st09_data_present(ctx: StoreContext) -> Result:
             if v in arrays_fine and v not in arrays_coarse:
                 fails.append(f"{levels[-1][1]}/{v}: sample variable is at the finest level {levels[0][1]} but missing from the coarsest level")
         for name in [v for v in ctx.cfg.get("sample_variables", []) if v in arrays_fine and v in arrays_coarse][:1]:
-            coarse = zarr.open_array(store=zstore, path=f"{levels[-1][1]}/{name}", mode="r")
+            # zarr_format=3: without it zarr also probes the v2 keys (.zarray, .zattrs), one
+            # wasted request each, and a public bucket answers them 403 rather than 404
+            coarse = zarr.open_array(store=zstore, path=f"{levels[-1][1]}/{name}", mode="r", zarr_format=3)
             lead = (-1,) * (coarse.ndim - 2)
             cblock = np.asarray(coarse[lead + (slice(None), slice(None))])
             cvalid = ~_is_empty(cblock, coarse.fill_value)
@@ -417,7 +425,7 @@ def st09_data_present(ctx: StoreContext) -> Result:
             # the valid coarse pixel nearest the centre, mapped to the finest level
             yy, xx = np.nonzero(cvalid)
             k = np.argmin((yy - cblock.shape[0] / 2) ** 2 + (xx - cblock.shape[1] / 2) ** 2)
-            fine = zarr.open_array(store=zstore, path=f"{levels[0][1]}/{name}", mode="r")
+            fine = zarr.open_array(store=zstore, path=f"{levels[0][1]}/{name}", mode="r", zarr_format=3)
             fy = int(yy[k] * fine.shape[-2] / cblock.shape[0])
             fx = int(xx[k] * fine.shape[-1] / cblock.shape[1])
             ch, cw = olpredict.decode_chunk_shape(arrays_fine[name])
@@ -437,7 +445,7 @@ def ht02_open_without_listing(ctx: StoreContext) -> Result:
     fails, rows = [], []
     for g in ctx.open_groups:
         try:
-            grp = zarr.open_group(store=ctx.reader.zarr_store(g, allow_list=False), mode="r")
+            grp = zarr.open_group(store=ctx.reader.zarr_store(g, allow_list=False), mode="r", zarr_format=3)
             n = len(list(grp.members(max_depth=None)))
             rows.append(f"{g}: opened with {n} members and no listing")
         except ListingNotAllowed as exc:
