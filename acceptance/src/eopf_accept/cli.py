@@ -55,7 +55,7 @@ def run_check(check_id: str, fn, ctx) -> Result:
     except BudgetExceeded:
         raise  # the cap stops the whole run
     except Exception as exc:
-        return Result(check_id, "store", VOID, f"crashed with {type(exc).__name__}: {exc}; no verdict for this check",
+        return Result(check_id, "host" if check_id == "HT02" else "store", VOID, f"crashed with {type(exc).__name__}: {exc}; no verdict for this check",
                       traceback.format_exc().splitlines()[-12:])
 
 
@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     http = Http(budget, log_path=out_dir / "requests.jsonl")
     started = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
     results: list[Result] = []
-    reader = StoreReader(args.store, budget)
+    reader = StoreReader(args.store, budget, forbidden_is_missing=args.stage == "scratch")
     try:
         ctx = StoreContext(reader, cfg, args.item) if needs_ctx else None
         oracle = zooms.oracle(ctx) if ctx else None
@@ -214,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         "nonce": http.nonce, "requests_used": budget.used, "max_requests": budget.max,
         "read_path": GATEWAY_NOTE if urlparse(args.store).hostname in PRODUCTION_HOSTS else "origin",
         "store_reads": reader.access(),
+        "forbidden_as_missing": reader.forbidden,
     }
     _, report_md = report.write(out_dir, meta, results)
     v = report.verdict(results)

@@ -346,11 +346,10 @@ def _center_chunk_key(meta: dict) -> str:
 
 
 def st08_dtype_and_compression(ctx: StoreContext) -> Result:
-    if not any(ctx.levels.values()):
-        return Result("ST08", "store", SKIP, "no multiscales level to check")
     allow = set(ctx.cfg.get("dtype_allow", []))
     pattern = re.compile(ctx.cfg.get("dtype_check_pattern", ".*"))
     fails, warns, rows = [], [], []
+    n_checked = 0
     for g, levels in ctx.levels.items():
         if not levels:
             continue
@@ -359,6 +358,7 @@ def st08_dtype_and_compression(ctx: StoreContext) -> Result:
         for _, lpath, _ in levels:
             arrays = ctx.arrays(g, lpath)
             checked = [n for n in arrays if pattern.search(n)]
+            n_checked += len(checked)
             for dtype in sorted({str(arrays[n].get("data_type")) for n in checked} - set(allow) if allow else set()):
                 names = [n for n in checked if str(arrays[n].get("data_type")) == dtype]
                 fails.append(f"{lpath}: dtype {dtype} not in the allow-list {sorted(allow)} ({len(names)} arrays, e.g. {names[:3]})")
@@ -381,6 +381,8 @@ def st08_dtype_and_compression(ctx: StoreContext) -> Result:
             rows.append(f"{path}/{name}: {meta['data_type']}, stored chunk {stored / 1e6:.2f} MB, raw {raw / 1e6:.2f} MB, ratio {ratio:.2f}")
             if meta["data_type"].startswith("float") and ratio < 1.2:
                 warns.append(f"{path}/{name}: {meta['data_type']} compresses only {ratio:.2f}x")
+    if not n_checked:  # no level, or no array matching dtype_check_pattern: nothing was checked, so no PASS
+        return Result("ST08", "store", SKIP, "no array to check: no multiscales level, or none matching dtype_check_pattern", warns + rows)
     status = FAIL if fails else WARN if warns else PASS
     summary = (fails[0] + (f" (+{len(fails) - 1} more)" if len(fails) > 1 else "") if fails else
                warns[0] if warns else "dtypes allowed on every level, compression OK")

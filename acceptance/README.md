@@ -52,8 +52,9 @@ uv run eopf-accept run  --collection sentinel-2-l2a --stage scratch --store $B/<
 - The https form reads unsigned and ignores every `AWS_*` variable. An `s3://` store follows
   `AWS_ENDPOINT_URL[_S3]` instead, which a shell may still hold from another run: `plan` and the
   report say where reads go (`store reads:`). Unsigned s3:// needs `AWS_SKIP_SIGNATURE=true`.
-- An unsigned reader counts a 403 as a missing key: a bucket without list rights answers 403,
-  not 404. A signed reader still fails on 403.
+- At `--stage scratch`, an unsigned reader counts a 403 as a missing key: a bucket without
+  list rights answers 403, not 404. The report lists each such key, because a key refused for
+  another reason looks the same. A signed reader, and any registered run, still fails on 403.
 - `--collection` only picks the config. Products without multiscales (`generic_rechunker`
   output) have no matching config yet; with a config that lists no `multiscales_groups`,
   ST03, ST07, ST08 and ST09 report SKIP, never PASS.
