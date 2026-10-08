@@ -30,9 +30,9 @@ rescale = ["0,0.3", "0,0.3", "0,0.3"]
 "0.11" = { group = "/measurements/reflectance" }
 
 [endpoints]
-# `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs 0.12
-# code (sha-5fbea81) but reports 0.11.0: its pyproject predates the 0.12.0 bump. Confirm on the first run.
-rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.11.0" }
+# `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs
+# titiler-eopf v0.12.2 (73b01a5) since 8 Oct.
+rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.12.2" }
 raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11", expect_version = "0.11.1" }
 
 # Verified on /rstaging for S2A_MSIL2A_20260928T140901_N0513_R053_T26WNE_20260928T203014 (29 Sep).

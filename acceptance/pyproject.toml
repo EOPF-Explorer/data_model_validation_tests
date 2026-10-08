@@ -3,25 +3,24 @@ name = "eopf-accept"
 version = "0.1.0"
 description = "Acceptance checks for freshly built EOPF GeoZarr stores, for each consumer (store, titiler /rstaging and /raster)"
 requires-python = ">=3.12,<3.14"  # titiler-eopf (the reader extra) caps at <3.14
-# zarr and obstore are pinned to the /rstaging image (titiler-eopf sha-5fbea81 uv.lock), so
-# the store checks read stores with the same code. Move the pins when the image moves.
+# The read path is exact for any installer; uv also holds every other package at the /rstaging
+# image's version ([tool.uv] constraint-dependencies), and `uv lock` fails if the two disagree.
 dependencies = [
     "geozarr-toolkit==0.1.2",
     "httpx[http2]>=0.27",
-    "morecantile==7.1.0",  # with rasterio: the TI02 zoom oracle uses titiler's own zoom arithmetic
+    "morecantile==7.0.3",  # with rasterio: the TI02 zoom oracle uses titiler's own zoom arithmetic
     "numpy>=1.26",
     "obstore==0.11.1",
     "pillow>=10",
     "pydantic>=2.12",  # ST12 catches its ValidationError (geozarr-toolkit's models)
-    "rasterio==1.5.2",
+    "rasterio==1.5.0",
     "zarr[cast-value-rs]==3.2.0",
 ]
 
 [project.optional-dependencies]
-# The local-reader check (TR01) runs titiler-eopf's own GeoZarrReader: the code /rstaging runs.
-# Pinned to 5fbea81, the exact commit /rstaging runs (v0.12.0 differs only in version strings,
-# so this reports 0.11.0 like /rstaging). It imports redis at load even with the cache off.
-reader = ["titiler-eopf @ git+https://github.com/EOPF-Explorer/titiler-eopf@5fbea81ff7b6cfd556c46be5bf1bf6671fb5ac58", "redis", "xarray==2026.4.0"]
+# The local-reader check (TR01) runs titiler-eopf's own GeoZarrReader at v0.12.2 (73b01a5), the
+# release /rstaging runs. It imports redis at load even with the cache off.
+reader = ["titiler-eopf @ git+https://github.com/EOPF-Explorer/titiler-eopf@73b01a5a53896958da7bd70a9565cb0358a2dc2a", "redis", "xarray==2026.4.0"]
 
 [project.scripts]
 eopf-accept = "eopf_accept.cli:main"
@@ -29,7 +28,7 @@ eopf-accept = "eopf_accept.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=8",
-    "uvicorn>=0.54.0",
+    "uvicorn>=0.46",
 ]
 
 [build-system]
@@ -41,6 +40,116 @@ allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv]
+# Every package the suite shares with the /rstaging image resolves to the image's version, so the
+# store checks, the zoom oracle, TR01 and the real-app tests run the code /rstaging runs. This is the
+# uv.lock of titiler-eopf 73b01a5a53896958da7bd70a9565cb0358a2dc2a (the reader pin), which the image
+# installs with `uv sync --frozen` on Python 3.12 (.python-version). When the image moves, regenerate it
+# in a titiler-eopf checkout at the new commit:
+#   uv export --frozen --no-hashes --no-emit-project --no-dev --extra server --extra cache --extra openeo --no-header --no-annotate
+constraint-dependencies = [
+    "affine==2.4.0",
+    "annotated-doc==0.0.4",
+    "annotated-types==0.7.0",
+    "anyio==4.15.1",
+    "attrs==26.1.0",
+    "cachetools==7.0.6",
+    "cast-value-rs==0.4.0",
+    "certifi==2026.4.22",
+    "cffi==2.0.0 ; platform_python_implementation != 'PyPy'",
+    "charset-normalizer==3.4.7",
+    "click==8.3.3",
+    "cligj==0.7.2",
+    "cloudpickle==3.1.2",
+    "color-operations==0.2.0",
+    "colorama==0.4.6 ; sys_platform == 'win32'",
+    "cramjam==2.11.0",
+    "cryptography==50.0.0",
+    "dask==2026.3.0",
+    "defusedxml==0.7.1",
+    "deprecated==1.3.1",
+    "donfig==0.8.1.post1",
+    "duckdb==1.5.2",
+    "fastapi==0.141.1",
+    "fsspec==2026.4.0",
+    "geojson-pydantic==1.2.0",
+    "google-crc32c==1.8.0",
+    "greenlet==3.5.0 ; platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64'",
+    "gunicorn==26.1.0",
+    "h11==0.16.0",
+    "httpcore==1.0.9",
+    "httpcore2==2.3.0",
+    "httptools==0.7.1",
+    "httpx==0.28.1",
+    "httpx2==2.3.0",
+    "idna==3.15",
+    "jinja2==3.1.6",
+    "jsonpath-ng==1.7.0",
+    "locket==1.0.0",
+    "markupsafe==3.0.3",
+    "morecantile==7.0.3",
+    "networkx==3.6.1",
+    "numcodecs==0.16.5",
+    "numexpr==2.14.1",
+    "numpy==2.4.4",
+    "obstore==0.11.1",
+    "openeo==0.39.1",
+    "openeo-pg-parser-networkx==2026.3.3",
+    "orjson==3.11.8",
+    "oschmod==0.3.12 ; sys_platform == 'win32'",
+    "packaging==26.2",
+    "pandas==3.0.2",
+    "partd==1.4.2",
+    "pendulum==3.2.0",
+    "ply==3.11",
+    "psycopg2-binary==2.9.12",
+    "pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'",
+    "pydantic==2.13.3",
+    "pydantic-core==2.46.3",
+    "pydantic-settings==2.14.2",
+    "pyparsing==3.3.2",
+    "pyproj==3.7.2",
+    "pystac==1.14.3",
+    "pystac-client==0.9.0",
+    "python-dateutil==2.9.0.post0",
+    "python-dotenv==1.2.2",
+    "pywin32==312 ; sys_platform == 'win32'",
+    "pyyaml==6.0.3",
+    "rasterio==1.5.0",
+    "redis==7.4.0",
+    "requests==2.33.1",
+    "rio-tiler==9.1.0",
+    "rioxarray==0.22.0",
+    "shapely==2.1.2",
+    "simplejson==4.1.1",
+    "six==1.17.0",
+    "sqlalchemy==2.0.49",
+    "starlette==1.6.0",
+    "starlette-cramjam==0.5.1",
+    "titiler-core==2.2.1",
+    "titiler-extensions==2.2.1",
+    "titiler-mosaic==2.2.1",
+    "titiler-openeo==0.18.0",
+    "titiler-stacapi==2.1.1",
+    "titiler-xarray==2.2.1",
+    "toolz==1.1.0",
+    "traitlets==5.14.3",
+    "truststore==0.10.4",
+    "typing-extensions==4.16.0",
+    "typing-inspection==0.4.2",
+    "tzdata==2026.2",
+    "urllib3==2.7.0",
+    "uvicorn==0.46.0",
+    "uvicorn-worker==0.4.0",
+    "uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'",
+    "watchfiles==1.1.1",
+    "websockets==16.0",
+    "wrapt==2.4.0",
+    "xarray==2026.4.0",
+    "yprov4wfs==0.0.8",
+    "zarr==3.2.0",
+]
 
 [tool.uv.workspace]
 members = []  # its own root: the repo-root pyproject (the GDAL suite) is not a uv project

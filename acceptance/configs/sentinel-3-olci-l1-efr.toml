@@ -29,9 +29,9 @@ rescale = ["10,300", "22,345", "36,390"]
 "0.11" = { group = "/measurements/r0", extra = { bidx = "1" } }  # the registered xyz/tilejson link form
 
 [endpoints]
-# `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs 0.12
-# code (sha-5fbea81) but reports 0.11.0: its pyproject predates the 0.12.0 bump. Confirmed live 6 Oct.
-rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.11.0" }
+# `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs
+# titiler-eopf v0.12.2 (73b01a5) since 8 Oct.
+rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.12.2" }
 raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11", expect_version = "0.11.1" }
 
 # `zooms` is an optional anchor: TI02 compares the tilejson with the range the store's own
@@ -99,7 +99,7 @@ until = "2026-12-31"
 # /raster TI02: the minzoom = maxzoom collapse is the link form, not titiler 0.11.1.
 # register_v1 (v1.15.0-s3olci-rc8, _S3_OLCI_BASE_LEVEL = "r0") links the level group
 # /measurements/r0, which has no multiscales, so titiler returns that level's zoom for both
-# (reader.py get_minzoom, same in 0.11.1 and 5fbea81); /rstaging passes. The first known issue
+# (reader.py get_minzoom, same in 0.11.1, 5fbea81 and v0.12.2); /rstaging passes. The first known issue
 # (6 Oct) blamed titiler and was retired on 7 Oct. This one names the real cause and won't be
 # fixed on 0.11: the titiler-eopf >0.12 flip replaces these links (Loïc, 7 Oct, option b; RG05
 # lists the 0.11 links that 422 on /rstaging). It matches only that mechanism, on /raster only.

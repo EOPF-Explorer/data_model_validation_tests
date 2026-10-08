@@ -1,4 +1,4 @@
-"""The battery against the REAL titiler-eopf app at 5fbea81 (the commit /rstaging runs; it reports 0.11.0).
+"""The battery against the REAL titiler-eopf app at v0.12.2 (the release /rstaging runs).
 
 A one-item STAC stub stands in for /stac, so the app resolves the fixture store exactly
 as /rstaging resolves a registered item. This reproduces the 6 Oct OLCI bug end to end:
@@ -29,6 +29,7 @@ from eopf_accept.store_checks import StoreContext  # noqa: E402
 from eopf_accept.storeio import StoreReader  # noqa: E402
 from eopf_accept.titiler_checks import TitilerBattery  # noqa: E402
 
+from .fake_titiler import VERSIONS  # noqa: E402
 from .geozarr_fixture import CFG, build  # noqa: E402
 
 ITEM = "S3B_FIXTURE"
@@ -104,7 +105,7 @@ def run_battery(base, store):
     oracle and the real app agree."""
     oracle = zooms.oracle(StoreContext(StoreReader(store, Budget(500)), CFG))
     http = Http(Budget(100))
-    ep = {"base": base, "api": "0.12", "expect_version": "0.11.0"}
+    ep = {"base": base, "api": "0.12", "expect_version": VERSIONS["0.12"]}  # the pinned app must report what /rstaging is expected to
     return {r.id: r for r in TitilerBattery(http, "local-0.12", ep, CFG, ITEM, zoom_oracle=oracle).run()}
 
 

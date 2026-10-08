@@ -72,7 +72,7 @@ def declaration_problems(attrs: dict) -> list[str]:
 
 
 def titiler_visible(group_attrs: dict, array_attrs: list[dict]) -> bool:
-    """titiler-eopf 0.12 `GeoZarrReader._get_groups` for one group (reader.py, v0.12.0).
+    """titiler-eopf 0.12 `GeoZarrReader._get_groups` for one group (reader.py, v0.12.0 to v0.12.2).
 
     A group with `zarr_conventions` is visible only if it declares both spatial and proj.
     A group without them is visible only if one of its arrays declares both.

@@ -12,7 +12,7 @@ Slice 1 of the plan. Benchmarks and the OpenLayers browser runner come in later 
 ```bash
 cd acceptance
 uv sync                   # core
-uv sync --extra reader    # + titiler-eopf 0.12.0's own reader, for TR01 and the integration tests
+uv sync --extra reader    # + titiler-eopf 0.12.2's own reader, for TR01 and the integration tests
 ```
 
 ## Use
@@ -31,7 +31,7 @@ uv run eopf-accept run --collection sentinel-3-olci-l1-efr-staging --stage scrat
 uv run eopf-accept run …same as plan…
 
 # A local or ad-hoc endpoint: NAME=URL@REPORTED_VERSION:API (API 0.11 or 0.12)
-uv run eopf-accept run … --endpoint local=http://127.0.0.1:8000@0.12.0:0.12
+uv run eopf-accept run … --endpoint local=http://127.0.0.1:8000@0.12.2:0.12
 ```
 
 Reports go to `~/DevDS/EOPF/acceptance_runs/<UTC>_<collection>_<stage>_<label>/` (`report.md`,
