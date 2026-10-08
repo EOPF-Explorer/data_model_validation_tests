@@ -79,6 +79,16 @@ uv run eopf-accept run  --collection sentinel-2-l2a --stage scratch --store $B/<
 
 ## Checks
 
+Each ID's prefix says what it exercises, and `--groups` picks them:
+
+- **ST** store and **HT** host (`store`): the store's own metadata and data, and how its bucket serves it
+- **GR** generic rechunker (`store`, for configs with a `[generic]` table): the `generic_rechunker` layout and CF packing
+- **TR** titiler reader (`reader`): titiler-eopf's own `GeoZarrReader`, in-process
+- **TI** titiler (`titiler`): each titiler-eopf endpoint over HTTP
+- **RG** registration (`registration`): the registered STAC item
+
+Numbers are IDs, not an order; gaps are unused IDs.
+
 | id | checks | catches |
 |---|---|---|
 | ST01 | consolidated metadata on the root (or each sub-root, `consolidation = "subroot"`, data-model#291 Ex.2), the opened, multiscales and `consolidated_groups`; levels listed | unconsolidated groups → 0.12 500 (data-pipeline#446); the validator blind spot |
