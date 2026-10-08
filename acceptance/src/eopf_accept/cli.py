@@ -182,13 +182,15 @@ def main(argv: list[str] | None = None) -> int:
     reader = StoreReader(args.store, budget, forbidden_is_missing=args.stage == "scratch")
     try:
         ctx = StoreContext(reader, cfg, args.item) if needs_ctx else None
+        if ctx:
+            cfg = ctx.cfg  # `{subroot}` resolved, for the reader, registration, titiler and known issues
         oracle = zooms.oracle(ctx) if ctx else None
         if "store" in groups:
             results += [run_check(cid, fn, ctx) for cid, fn in CHECKS.items()]
         if "reader" in groups:
             from .reader_check import tr01_local_reader
 
-            results.append(tr01_local_reader(args.store, ctx.cfg, center, ctx.absent_optional))
+            results.append(tr01_local_reader(args.store, cfg, center, ctx.absent_optional))
         item = footprint = None
         if "registration" in groups:
             item = rg.fetch_item(http, cfg["stac"], args.collection, args.item)

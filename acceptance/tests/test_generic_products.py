@@ -228,3 +228,58 @@ def test_gr03_64_bit_extremes_fit_and_a_scalar_valid_range_is_reported():
                           "codecs": [{"name": "bytes"}], "attributes": {"valid_range": 5}}})
     res = gr03_encoding(ctx)
     assert res.status == FAIL and "is not a [min, max] pair" in res.summary
+
+
+# --- from the review of the fixes ----------------------------------------------------------------
+
+def test_the_resolved_config_reaches_known_issues(tmp_path):
+    """The CLI used to keep its raw config for registration, titiler and known issues: a known issue
+    written with `{subroot}` never matched the resolved problem text."""
+    import json
+
+    from eopf_accept import cli
+    toml = (CONFIG_DIR / "sentinel-1-l1-grd.toml").read_text().replace("spatial_chunk = 1024", "spatial_chunk = 16")
+    toml = toml.replace("[generic]", 'known_issues = [{ check = "ST01", match = "{subroot}/overviews: no zarr.json", '
+                                      'ref = "data-model#249", until = 2099-12-31 }]\n\n[generic]', 1)
+    (tmp_path / "s1.toml").write_text(toml)
+    cli.main(["run", "--collection", "sentinel-1-l1-grd", "--config", str(tmp_path / "s1.toml"), "--stage", "scratch",
+              "--groups", "store", "--store", build_s1(tmp_path / "s.zarr"), "--out", str(tmp_path / "runs")])
+    run_json = json.loads(next((tmp_path / "runs").glob("*/run.json")).read_text())
+    st01 = next(r for r in run_json["results"] if r["id"] == "ST01")
+    assert st01["status"] == "KNOWN", st01
+
+
+def test_an_unknown_sub_root_sends_no_placeholder_requests(tmp_path):
+    cfg = s1_config()
+    del cfg["subroot_asset"]
+    ctx, res = run(build_s1(tmp_path / "s.zarr"), cfg)
+    assert not [g for g in ctx.nodes if "{subroot}" in g]
+    assert not [p for p in res["ST01"].problems if "{subroot}" in p], res["ST01"].problems
+
+
+@pytest.mark.parametrize("codecs, compressed", [
+    ([{"name": "bytes"}, {"name": "numcodecs.crc32"}], False),
+    ([{"name": "numcodecs.shuffle"}, {"name": "bytes"}], False),
+    ([{"name": "bytes"}, {"name": "numcodecs.zstd"}], True),
+    ([{"name": "bytes"}, {"name": "blosc"}], True),
+])
+def test_filters_and_checksums_are_not_compression(codecs, compressed):
+    ctx = fake_ctx({"lat": {"shape": [40, 50], "chunks": [40, 50], "data_type": "int32", "codecs": codecs},
+                    "v": {"shape": [40, 50], "chunks": [16, 16], "data_type": "uint8", "codecs": [{"name": "zstd"}],
+                          "attributes": {"coordinates": "lat"}}})
+    warned = any(e.startswith("lat: 2-D coordinate") for e in gr02_chunks_and_shards(ctx).evidence)
+    assert warned is not compressed
+
+
+def test_odd_coordinate_dtypes_are_reported_not_crashed():
+    ctx = fake_ctx({"t": {"shape": [40, 50], "chunks": [40, 50], "codecs": [{"name": "bytes"}],
+                          "data_type": {"name": "numpy.datetime64", "configuration": {"unit": "s"}}},
+                    "v": {"shape": [40, 50], "chunks": [16, 16], "data_type": "uint8", "codecs": [{"name": "zstd"}],
+                          "attributes": {"coordinates": "t"}}})
+    assert gr02_chunks_and_shards(ctx).status == WARN
+
+
+def test_a_string_fill_value_on_an_integer_array_fails():
+    ctx = fake_ctx({"oa": {"shape": [4], "chunks": [4], "data_type": "uint16", "fill_value": 0,
+                           "codecs": [{"name": "bytes"}], "attributes": {"_FillValue": "65535"}}})
+    assert gr03_encoding(ctx).status == FAIL

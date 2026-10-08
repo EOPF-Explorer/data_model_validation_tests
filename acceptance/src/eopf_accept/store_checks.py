@@ -93,6 +93,9 @@ def _subroot_of(href: str) -> str | None:
     return "/".join(parts[:i]) or None
 
 
+GROUP_KEYS = ("open_groups", "multiscales_groups", "consolidated_groups", "visible_groups")
+
+
 def _with_subroot(value, subroot: str):
     """`{subroot}` replaced in every string of a config (TOML dates and numbers kept as they are)."""
     if isinstance(value, str):
@@ -122,8 +125,10 @@ class StoreContext:
             if self.subroot is None:
                 self.subroot_problem = (f"sub-root unknown: the root's stac_discovery has no asset {asset!r} whose href "
                                         f"lies under a sub-root (href {href!r})")
-            if self.subroot:  # every group path in the config: open/multiscales/visible groups, items, assets, render
-                cfg = _with_subroot(cfg, self.subroot)
+        if self.subroot:  # every group path in the config: open/multiscales/visible groups, items, assets, render
+            cfg = _with_subroot(cfg, self.subroot)
+        else:  # no request for literal `{subroot}/…` keys: ST01 reports the one cause
+            cfg = {**cfg, **{k: [g for g in cfg[k] if "{subroot}" not in g] for k in GROUP_KEYS if k in cfg}}
         self.cfg = cfg
         self.consolidated_groups: list[str] = list(cfg.get("consolidated_groups", []))
         for g in [self.subroot, *self.consolidated_groups]:
@@ -530,11 +535,11 @@ def ht02_open_without_listing(ctx: StoreContext) -> Result:
 # group rechunked, sharded and encoded with one rule (eopf_geozarr conversion/utils.py
 # create_uniform_encoding). They run for configs with a `[generic]` table, on the arrays the
 # consolidation root lists (the root, or the sub-root with `consolidation = "subroot"`).
-NOT_COMPRESSING = {"bytes", "transpose", "crc32c", "sharding_indexed", "vlen-utf8", "vlen-bytes"}
+COMPRESSORS = {"blosc", "zstd", "gzip", "zlib", "bz2", "lzma", "lz4"}  # also as numcodecs.<name>
 
 
-def _compressed(codec_names: list[str]) -> bool:
-    return bool(set(codec_names) - NOT_COMPRESSING)
+def _compressed(codec_names: list) -> bool:
+    return any((n or "").removeprefix("numcodecs.") in COMPRESSORS for n in codec_names)
 
 
 def _generic_arrays(ctx: StoreContext, check_id: str) -> tuple[dict, str, dict] | Result:
@@ -588,8 +593,8 @@ def gr02_chunks_and_shards(ctx: StoreContext) -> Result:
     size, sharded = int(gen["spatial_chunk"]), bool(gen.get("sharding", True))
     coords = _coordinates(cm)
     # multiscales groups (S1 `overviews`) are written by another path, for tiling: not this rule
-    pyramids = tuple(f"{g}/" for g in ctx.ms_groups)
-    fails, warns, n = [], [], 0
+    pyramids = tuple(f"{g.rstrip('?')}/" for g in ctx.cfg.get("multiscales_groups", []))
+    fails, warns, n, undeclared = [], [], 0, 0
     for path, m in sorted(cm.items()):
         if m.get("node_type") != "array" or not m.get("shape"):
             continue
@@ -601,12 +606,13 @@ def gr02_chunks_and_shards(ctx: StoreContext) -> Result:
             if len(m["shape"]) >= 2 and not _compressed(names):
                 try:
                     size_mb = f"{math.prod(m['shape']) * np.dtype(m['data_type']).itemsize / 1e6:.0f} MB"
-                except TypeError:
+                except (TypeError, ValueError, KeyError):
                     size_mb = f"dtype {m.get('data_type')!r}"
                 warns.append(f"{label}: {len(m['shape'])}-D coordinate {m['shape']} stored uncompressed ({size_mb}) and unsharded (chunk_and_shard_coords off)")
             continue
         if shard is None and not _compressed(names):
             # the writer's coordinate encoding, on an array nothing declares as a coordinate
+            undeclared += 1
             warns.append(f"{label}: written like a coordinate (unsharded, uncompressed) but no CF `coordinates` attribute "
                          f"names it, so readers see a data variable")
             continue
@@ -620,12 +626,14 @@ def gr02_chunks_and_shards(ctx: StoreContext) -> Result:
                 fails.append(f"{label}: not sharded")
             elif shard != want_shard:
                 fails.append(f"{label}: shard {shard}, want {want_shard} (one shard per array)")
+    noted = (f"{len(warns) - undeclared} coordinate(s) stored uncompressed, "
+             f"{undeclared} array(s) written like coordinates that nothing declares")
     if not n:
-        return Result("GR02", "store", WARN if warns else SKIP, f"{root or '/'}: no data array to check" +
-                      (f"; {len(warns)} coordinate array(s) uncompressed or undeclared" if warns else ""), warns)
+        return Result("GR02", "store", WARN if warns else SKIP,
+                      f"{root or '/'}: no data array to check" + (f"; {noted}" if warns else ""), warns)
     status = FAIL if fails else WARN if warns else PASS
     summary = (f"{len(fails)} array(s) off the generic_rechunker layout" if fails else
-               f"{n} data arrays on the layout; {len(warns)} coordinate array(s) uncompressed or undeclared" if warns else
+               f"{n} data arrays on the layout; {noted}" if warns else
                f"{n} data arrays chunked to {size}" + (", one shard each" if sharded else ""))
     return Result("GR02", "store", status, summary, fails[:40] + warns[:20], problems=fails)
 
@@ -633,7 +641,9 @@ def gr02_chunks_and_shards(ctx: StoreContext) -> Result:
 def _fits(value, dtype: np.dtype) -> bool:
     if dtype.kind not in "iu":
         return True
-    if isinstance(value, int) and not isinstance(value, bool):
+    if isinstance(value, (str, bool)):
+        return False  # "65535" is not a valid CF _FillValue for a uint16 array
+    if isinstance(value, int):
         v = value  # as an int: a float can't hold uint64's max exactly
     else:
         try:
