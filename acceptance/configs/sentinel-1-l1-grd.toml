@@ -1,0 +1,38 @@
+# Sentinel-1 Level-1 GRD (IW GRDH, EW GRDM), as data-model writes it with generic_rechunker
+# (EOPF-Explorer/data-model#292). DRAFT, written from the EODC branch products (8 Oct 2026) and
+# from the layout EODC listed in data-model#249 (30 Sep): one sub-root per product
+# (`S01SIWGRD_<start>_…_<id>`) holding conditions, measurements, quality and `overviews`
+# (multiscales r2–r8 on x/y, "solely for visualization purposes"). `measurements/grd` is in radar
+# ground-range geometry (GCPs in conditions/gcp): titiler-eopf can't render it, `overviews` is
+# what the explorer would show.
+collections = ["sentinel-1-l1-grd", "sentinel-1-l1-grd-staging"]
+
+# The sub-root's name differs per product: read it from the root's own stac_discovery, where
+# asset `grd` points at `/<sub-root>/measurements/grd`.
+subroot_asset = "grd"
+# data-model#291 (decided): "Every group, which is a root (ex. 1) or subroot (ex. 2) is
+# consolidated" (S1 is Ex.2: the sub-root, not the root) and "Every group, which is exposed as a
+# STAC asset by href, is consolidated" (Ex.4: the lowest measurements group).
+consolidation = "subroot"
+consolidated_groups = ["{subroot}/measurements"]
+
+# What a consumer opens and renders. The #292 products have no `overviews` yet: ST01, ST03, ST04
+# and HT02 FAIL on it, which is the point (data-model#249 lists it; ask before relaxing).
+open_groups = ["{subroot}/overviews"]
+multiscales_groups = ["{subroot}/overviews"]
+min_levels = 2
+sample_variables = ["grd"]
+dtype_allow = ["uint16"]
+dtype_check_pattern = "^grd$"
+min_valid = 0.25
+min_distinct = 16
+
+# GR02/GR03: generic_rechunker's chunking, sharding and encoding rule.
+[generic]
+spatial_chunk = 1024   # the writer's default (generic_converter.py: "spatial_chunk : int, default 1024")
+sharding = true
+
+[consumers.openlayers]
+
+[render]
+variables = ["grd"]    # rescale and the 0.12 route: to set once a product has `overviews`

@@ -55,9 +55,10 @@ uv run eopf-accept run  --collection sentinel-2-l2a --stage scratch --store $B/<
 - At `--stage scratch`, an unsigned reader counts a 403 as a missing key: a bucket without
   list rights answers 403, not 404. The report lists each such key, because a key refused for
   another reason looks the same. A signed reader, and any registered run, still fails on 403.
-- `--collection` only picks the config. Products without multiscales (`generic_rechunker`
-  output) have no matching config yet; with a config that lists no `multiscales_groups`,
-  ST03, ST07, ST08 and ST09 report SKIP, never PASS.
+- `--collection` only picks the config (`configs/`). `sentinel-1-l1-grd` is for
+  `generic_rechunker` output (a draft): it expects the `overviews` data-model#249 lists, which
+  the #292 products don't have yet, so it FAILs on them. A check with nothing to examine
+  reports SKIP, never PASS.
 
 ## Safety
 
@@ -80,10 +81,11 @@ uv run eopf-accept run  --collection sentinel-2-l2a --stage scratch --store $B/<
 
 | id | checks | catches |
 |---|---|---|
-| ST01 | consolidated metadata on the root, opened and multiscales groups; levels listed | unconsolidated groups → 0.12 500 (data-pipeline#446); the validator blind spot |
+| ST01 | consolidated metadata on the root (or each sub-root, `consolidation = "subroot"`, data-model#291 Ex.2), the opened, multiscales and `consolidated_groups`; levels listed | unconsolidated groups → 0.12 500 (data-pipeline#446); the validator blind spot |
 | ST03 | what titiler 0.12 reads without fallback: conventions, bbox, CRS, `spatial:dimensions`, shape+transform for min/max zoom, a transform per level; coarsening order | OLCI tilejson 500 (data-model#303); level tiles 500 |
 | ST04 | opened groups visible to titiler-eopf (`_get_groups` rule); no undeclared `spatial:`/`proj:` keys | invisible groups (`scl`) |
 | ST11 | `zarr_conventions` declarations equal the v0.1 schema consts (WARN, or FAIL with `strict_declarations`) | stale names/URLs (inspect.geozarr.org) |
+| ST12 | spatial/proj/multiscales attribute contents against geozarr-toolkit's models (WARN); `spatial:dimensions` required on arrays only, as spatial v0.1 says | invalid convention attributes |
 | ST07 | chunk/shard layout; tile size `ol/source/GeoZarr` will pick, per consumer ol version | the ≤10.10 64 px fallback |
 | ST08 | dtype allow-list; compression ratio of the centre chunk | heavy float64 stores |
 | ST09 | the finest level has data where the coarsest level does | empty conversions |
@@ -91,8 +93,14 @@ uv run eopf-accept run  --collection sentinel-2-l2a --stage scratch --store $B/<
 | TR01 | titiler-eopf 0.12's own `GeoZarrReader`: open, zooms, tiles (scratch only) | anything the server would 500 on |
 | TI00–TI09 | per endpoint: version + route fingerprint, /info, tilejson without zoom params, decoded tiles scaled by footprint coverage, RGB channels, cold cache, viewer, URL-form contract, fit-bounds vs minzoom | C1, C8, C13, C14 |
 | RG04/05/07/08 | the item's links render; do they also work on 0.12 (flip readiness); item newer than its store; asset hrefs point exactly at this store's groups | broken links, the /raster flip, stale registrations |
+| GR02 | `generic_rechunker` layout: each dimension chunked to `min(spatial_chunk, size)`, one shard per array (FAIL); 2-D coordinates left uncompressed, and arrays written like coordinates that nothing declares as one (WARN) | rechunking or sharding that drifts from data-model#292's rule |
+| GR03 | CF packing: CF `scale_factor`/`add_offset` and the `scale_offset` codec never both; `_FillValue` and the valid range fit the dtype (FAIL); zarr `fill_value` ≠ CF `_FillValue` (WARN) | double decoding; nodata that readers mask differently |
 
-Per-collection settings live in `configs/*.toml`. The S2 and S1 configs are drafts.
+Per-collection settings live in `configs/*.toml`; all but OLCI are drafts. For products whose
+sub-root name differs per product (S1), `subroot_asset` names the asset of the root's own
+`stac_discovery` that points into it, and `{subroot}` in `open_groups`, `multiscales_groups` and
+`consolidated_groups` is replaced with it. GR02/GR03 run only for configs with a `[generic]`
+table (`spatial_chunk`, `sharding`).
 
 ## Tests
 
