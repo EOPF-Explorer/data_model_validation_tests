@@ -14,7 +14,7 @@ ASSET_ROUTE = "/collections/{collection_id}/items/{item_id}/assets/{asset_id}"
 
 class State:
     def __init__(self):
-        self.version = "0.11.0"  # what sha-5fbea81 reports
+        self.version = "0.12.2"  # what /rstaging reports
         self.api = "0.12"  # which routes /api lists
         self.tilejson_status = 200
         self.zooms = (5, 9)  # tilejson minzoom, maxzoom

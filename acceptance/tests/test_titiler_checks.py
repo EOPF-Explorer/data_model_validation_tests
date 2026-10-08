@@ -14,8 +14,8 @@ from .fake_titiler import State, serve
 from .geozarr_fixture import CFG
 
 ITEM = "S3B_TEST"
-RSTAGING = {"api": "0.12", "expect_version": "0.11.0"}  # 0.12 code that reports 0.11.0
-RASTER = {"api": "0.11", "expect_version": "0.11.0"}  # the fake reports 0.11.0 for both
+RSTAGING = {"api": "0.12", "expect_version": "0.12.2"}
+RASTER = {"api": "0.11", "expect_version": "0.12.2"}  # the fake reports one version for both
 # zooms.oracle for an OLCI-shaped store whose multiscales give 5–9 (the fake tilejson's default)
 ORACLE = {"measurements": {"levels": [("measurements/r0", 9), ("measurements/r2", 8), ("measurements/r4", 7),
                                       ("measurements/r8", 6), ("measurements/r16", 5)], "range": (5, 9)}}
@@ -57,7 +57,7 @@ def test_version_guard_is_fail_closed(server):
     state.version = ""
     res = battery(base).run()
     assert [r.id for r in res] == ["TI00"] and res[0].status == FAIL
-    state.version = "0.12.0"  # config expects 0.11.0
+    state.version = "0.12.0"  # config expects 0.12.2
     assert battery(base).run()[0].status == FAIL
 
 
