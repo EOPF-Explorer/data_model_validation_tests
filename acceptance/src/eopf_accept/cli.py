@@ -7,7 +7,7 @@
 sends nothing. `run` refuses to start if the planned bound exceeds --max-requests, and
 stops at the cap regardless (every physical request spends the budget first).
 Titiler checks run only against endpoints named with --endpoint: no target is implied.
-Exit codes: 0 no FAIL, 1 at least one FAIL, 2 usage/config/budget refusal, 3 VOID (re-run).
+Exit codes: 0 no FAIL, 1 at least one FAIL, 2 usage/config/budget refusal, 3 VOID (no verdict: a cache HIT, or a check crashed).
 """
 
 import argparse
@@ -46,6 +46,17 @@ def load_config(collection: str, config: str | None, config_dir: Path) -> dict:
             cfg["_config_path"] = str(p)
             return cfg
     raise SystemExit(f"no config in {config_dir} lists collection {collection!r} (use --config)")
+
+
+def run_check(check_id: str, fn, ctx) -> Result:
+    """One check's crash is a VOID for that check, not the loss of every other verdict."""
+    try:
+        return fn(ctx)
+    except BudgetExceeded:
+        raise  # the cap stops the whole run
+    except Exception as exc:
+        return Result(check_id, "host" if check_id == "HT02" else "store", VOID, f"crashed with {type(exc).__name__}: {exc}; no verdict for this check",
+                      traceback.format_exc().splitlines()[-12:])
 
 
 def parse_endpoints(specs: list[str], cfg: dict) -> dict[str, dict]:
@@ -138,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "plan":
         print(f"config: {cfg['_config_path']}")
         print(f"store: {args.store}  stage: {args.stage}  groups: {sorted(groups)}")
+        print(f"store reads: {StoreReader(args.store, budget).access()}")
         if urlparse(args.store).hostname in PRODUCTION_HOSTS:
             print(GATEWAY_NOTE)
         for name, ep in endpoints.items() if "titiler" in groups else []:
@@ -167,12 +179,12 @@ def main(argv: list[str] | None = None) -> int:
     http = Http(budget, log_path=out_dir / "requests.jsonl")
     started = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
     results: list[Result] = []
-    reader = StoreReader(args.store, budget)
+    reader = StoreReader(args.store, budget, forbidden_is_missing=args.stage == "scratch")
     try:
         ctx = StoreContext(reader, cfg, args.item) if needs_ctx else None
         oracle = zooms.oracle(ctx) if ctx else None
         if "store" in groups:
-            results += [fn(ctx) for fn in CHECKS.values()]
+            results += [run_check(cid, fn, ctx) for cid, fn in CHECKS.items()]
         if "reader" in groups:
             from .reader_check import tr01_local_reader
 
@@ -201,6 +213,8 @@ def main(argv: list[str] | None = None) -> int:
         "started": started, "finished": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         "nonce": http.nonce, "requests_used": budget.used, "max_requests": budget.max,
         "read_path": GATEWAY_NOTE if urlparse(args.store).hostname in PRODUCTION_HOSTS else "origin",
+        "store_reads": reader.access(),
+        "forbidden_as_missing": reader.forbidden,
     }
     _, report_md = report.write(out_dir, meta, results)
     v = report.verdict(results)

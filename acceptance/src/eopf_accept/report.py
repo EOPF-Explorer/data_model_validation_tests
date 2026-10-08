@@ -30,6 +30,9 @@ def write(out_dir: Path, meta: dict, results: list[Result]) -> tuple[Path, Path]
         f"- endpoints: {', '.join(f'{k} ({v})' for k, v in meta.get('endpoints', {}).items()) or '-'}",
         f"- run: {meta['started']} → {meta['finished']}, nonce `{meta['nonce']}`, requests {meta['requests_used']}/{meta['max_requests']}",
         f"- store read path: {meta.get('read_path', 'origin')}",
+        f"- store reads: {meta.get('store_reads', '-')}",
+        *([f"- answered 403, counted as missing ({len(f)}): " + ", ".join(f"`{k}`" for k in f[:20]) + (" …" if len(f) > 20 else "")]
+          if (f := meta.get("forbidden_as_missing")) else []),
         "",
         "| check | group | status | summary |",
         "|---|---|---|---|",
