@@ -7,6 +7,7 @@ replaced that with the largest divisor of the chunk that is ≤ 512.
 """
 
 MIN_TILE, MAX_TILE, DEFAULT_TILE, MAX_CHUNK_TILE = 64, 512, 256, 2048
+CURRENT_SINCE = (10, 11)  # the first release with the `current` rule
 
 
 def _shard_legacy(shard: int, inner: int) -> int:
@@ -38,7 +39,7 @@ def _chunk_current(chunk: int, array: int) -> int:
 
 def rule_for(version: str) -> str:
     major, minor, *_ = (int(p) for p in version.split("."))
-    return "current" if (major, minor) >= (10, 11) else "legacy"
+    return "current" if (major, minor) >= CURRENT_SINCE else "legacy"
 
 
 def tile_size(meta: dict, version: str) -> tuple[int, int]:

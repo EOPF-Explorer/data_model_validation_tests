@@ -371,8 +371,11 @@ def st12_convention_content(ctx: StoreContext) -> Result:
 
 
 def st07_chunk_layout(ctx: StoreContext) -> Result:
+    """A tile-size problem that upgrading the viewer fixes is a WARN naming the upgrade
+    (Loïc, 8 Oct); one that the newest modelled OpenLayers still has is the store's, a FAIL."""
     consumers: dict = (ctx.cfg.get("consumers") or {}).get("openlayers") or {}
-    fails, warns, rows = [], [], []
+    fixed_in = ".".join(map(str, olpredict.CURRENT_SINCE))
+    fails, upgrades, warns, rows = [], [], [], []
     for g, levels in ctx.levels.items():
         for _, path, _node in levels:
             arrays = ctx.arrays(g, path)
@@ -386,21 +389,33 @@ def st07_chunk_layout(ctx: StoreContext) -> Result:
             grid = meta["chunk_grid"]["configuration"]["chunk_shape"]
             n_inner = math.ceil(meta["shape"][-2] / ch) * math.ceil(meta["shape"][-1] / cw)
             row = f"{path}/{name}: shape {meta['shape'][-2:]}, chunk {grid[-2:]}, decode unit {ch}x{cw} ({chunk_mb:.1f} MB), {n_inner} decode unit(s)"
+            (ftw, fth), fixed_ratio = olpredict.tile_size(meta, fixed_in), olpredict.decode_ratio(meta, fixed_in)
             for consumer, version in consumers.items():
                 tw, th = olpredict.tile_size(meta, version)
                 ratio = olpredict.decode_ratio(meta, version)
                 row += f"; {consumer} ol {version}: {tw}x{th} px tiles, {ratio:.1f} decoded px per drawn px"
-                if ratio >= 16:  # an unsharded 1024 px chunk drawn as 256 px tiles under ol ≤ 10.10 is exactly 16
-                    fails.append(f"{path}/{name}: {consumer} (ol {version}) would draw {tw}x{th} px tiles and decode {ratio:.0f}x the pixels it draws")
+                if ratio < 16:  # an unsharded 1024 px chunk drawn as 256 px tiles under ol ≤ 10.10 is exactly 16
+                    continue
+                problem = f"{path}/{name}: {consumer} (ol {version}) would draw {tw}x{th} px tiles and decode {ratio:.0f}x the pixels it draws"
+                if fixed_ratio < 16:  # never for a version already on the current rule: its ratio is fixed_ratio
+                    upgrades.append(f"{problem}; ol {fixed_in} draws {ftw}x{fth} px tiles ({fixed_ratio:.1f}x): upgrade {consumer} to ol ≥ {fixed_in}")
+                else:
+                    fails.append(f"{problem}; ol {fixed_in}, the newest modelled release, still decodes {fixed_ratio:.1f}x")
             if n_inner == 1 and chunk_mb > 64:
                 warns.append(f"{path}/{name}: single-chunk level decodes {chunk_mb:.0f} MB per read")
             rows.append(row)
     if not rows:
         return Result("ST07", "store", SKIP, "no multiscales level with a data array to measure", warns)
-    status = FAIL if fails else WARN if warns else PASS
-    summary = (f"{len(fails)} OpenLayers tile-size problem(s)" if fails else
-               "layout OK" + ("" if consumers else " (no OpenLayers consumers configured)"))
-    return Result("ST07", "store", status, summary, fails + warns + rows)
+    status = FAIL if fails else WARN if upgrades or warns else PASS
+    parts = []
+    if fails:
+        parts.append(f"{len(fails)} OpenLayers tile-size problem(s) that ol {fixed_in} still has")
+    if upgrades:
+        parts.append(f"{len(upgrades)} OpenLayers tile-size problem(s) fixed by upgrading the viewer to ol ≥ {fixed_in}")
+    if warns:
+        parts.append(f"{len(warns)} single-chunk level(s) over 64 MB")
+    summary = "; ".join(parts) or "layout OK" + ("" if consumers else " (no OpenLayers consumers configured)")
+    return Result("ST07", "store", status, summary, fails + upgrades + warns + rows, problems=fails)
 
 
 def _center_chunk_key(meta: dict) -> str:

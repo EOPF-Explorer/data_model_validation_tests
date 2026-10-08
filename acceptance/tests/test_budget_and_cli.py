@@ -149,6 +149,6 @@ def test_ol_unsharded_large_chunks_differ_by_version():
     """10.11 also changed unsharded tiling: a 1024 px chunk gets 1024 px tiles instead of 256."""
     meta = {"shape": [4096, 4096], "chunk_grid": {"configuration": {"chunk_shape": [1024, 1024]}}, "codecs": [{"name": "bytes"}]}
     assert olpredict.tile_size(meta, "10.10.0") == (256, 256)
-    assert olpredict.decode_ratio(meta, "10.10.0") == 16.0  # ST07 fails at ≥ 16
+    assert olpredict.decode_ratio(meta, "10.10.0") == 16.0  # ST07 flags ≥ 16
     assert olpredict.tile_size(meta, "10.11.0") == (1024, 1024)
     assert olpredict.decode_ratio(meta, "10.11.0") == 1.0

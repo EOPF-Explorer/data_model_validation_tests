@@ -79,6 +79,16 @@ uv run eopf-accept run  --collection sentinel-2-l2a --stage scratch --store $B/<
 
 ## Checks
 
+Each ID's prefix says what it exercises, and `--groups` picks them:
+
+- **ST** store and **HT** host (`store`): the store's own metadata and data, and how its bucket serves it
+- **GR** generic rechunker (`store`, for configs with a `[generic]` table): the `generic_rechunker` layout and CF packing
+- **TR** titiler reader (`reader`): titiler-eopf's own `GeoZarrReader`, in-process
+- **TI** titiler (`titiler`): each titiler-eopf endpoint over HTTP
+- **RG** registration (`registration`): the registered STAC item
+
+Numbers are IDs, not an order; gaps are unused IDs.
+
 | id | checks | catches |
 |---|---|---|
 | ST01 | consolidated metadata on the root (or each sub-root, `consolidation = "subroot"`, data-model#291 Ex.2), the opened, multiscales and `consolidated_groups`; levels listed | unconsolidated groups → 0.12 500 (data-pipeline#446); the validator blind spot |
@@ -86,7 +96,7 @@ uv run eopf-accept run  --collection sentinel-2-l2a --stage scratch --store $B/<
 | ST04 | opened groups visible to titiler-eopf (`_get_groups` rule); no undeclared `spatial:`/`proj:` keys | invisible groups (`scl`) |
 | ST11 | `zarr_conventions` declarations equal the v0.1 schema consts (WARN, or FAIL with `strict_declarations`) | stale names/URLs (inspect.geozarr.org) |
 | ST12 | spatial/proj/multiscales attribute contents against geozarr-toolkit's models (WARN); `spatial:dimensions` required on arrays only, as spatial v0.1 says | invalid convention attributes |
-| ST07 | chunk/shard layout; tile size `ol/source/GeoZarr` will pick, per consumer ol version | the ≤10.10 64 px fallback |
+| ST07 | chunk/shard layout; tile size `ol/source/GeoZarr` will pick, per consumer ol version | the ≤10.10 64 px fallback: WARN naming the upgrade when ol 10.11 avoids it, FAIL when 10.11 (the newest modelled release) still has it |
 | ST08 | dtype allow-list; compression ratio of the centre chunk | heavy float64 stores |
 | ST09 | the finest level has data where the coarsest level does | empty conversions |
 | HT02 | each opened group, rooted where titiler roots it, opens with listing forbidden | PROPFIND 405 over HTTP |
