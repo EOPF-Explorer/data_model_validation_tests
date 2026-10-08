@@ -96,7 +96,7 @@ Numbers are IDs, not an order; gaps are unused IDs.
 | ST04 | opened groups visible to titiler-eopf (`_get_groups` rule); no undeclared `spatial:`/`proj:` keys | invisible groups (`scl`) |
 | ST11 | `zarr_conventions` declarations equal the v0.1 schema consts (WARN, or FAIL with `strict_declarations`) | stale names/URLs (inspect.geozarr.org) |
 | ST12 | spatial/proj/multiscales attribute contents against geozarr-toolkit's models (WARN); `spatial:dimensions` required on arrays only, as spatial v0.1 says | invalid convention attributes |
-| ST07 | chunk/shard layout; tile size `ol/source/GeoZarr` will pick, per consumer ol version | the ≤10.10 64 px fallback: WARN naming the upgrade when ol ≥ 10.11 avoids it, FAIL when no release does |
+| ST07 | chunk/shard layout; tile size `ol/source/GeoZarr` will pick, per consumer ol version | the ≤10.10 64 px fallback: WARN naming the upgrade when ol 10.11 avoids it, FAIL when 10.11 (the newest modelled release) still has it |
 | ST08 | dtype allow-list; compression ratio of the centre chunk | heavy float64 stores |
 | ST09 | the finest level has data where the coarsest level does | empty conversions |
 | HT02 | each opened group, rooted where titiler roots it, opens with listing forbidden | PROPFIND 405 over HTTP |

@@ -160,20 +160,24 @@ def test_c6_1024_inner_chunks_warn_for_ol_10_10_and_name_the_upgrade(tmp_path):
     cfg = copy.deepcopy(CFG) | {"sample_variables": ["oa08_radiance"], "dtype_allow": ["uint16"]}
     cfg["consumers"] = {"openlayers": {"sentinel-explorer": "10.10.0", "upstream": "10.11.0"}}
     st07 = run(path, cfg)["ST07"]
-    assert st07.status == WARN and "fixed by upgrading the viewer to ol ≥ 10.11" in st07.summary
-    assert "64x64 px tiles" in st07.evidence[0] and st07.evidence[0].endswith("ol ≥ 10.11 draws 512x512 px tiles (4x): upgrade sentinel-explorer")
+    assert st07.status == WARN and st07.summary.endswith("OpenLayers tile-size problem(s) fixed by upgrading the viewer to ol ≥ 10.11")
+    assert "64x64 px tiles" in st07.evidence[0]
+    assert st07.evidence[0].endswith("ol 10.11 draws 512x512 px tiles (4.0x): upgrade sentinel-explorer to ol ≥ 10.11")
     cfg["consumers"] = {"openlayers": {"upstream": "10.11.0"}}
     assert run(path, cfg)["ST07"].status == PASS
 
 
-def test_c6_2048_inner_chunks_fail_because_no_ol_release_avoids_it(tmp_path):
-    """10.11 still decodes 16x here (512 px tiles from 2048 px chunks): the store's problem, not the viewer's."""
+def test_c6_2048_inner_chunks_fail_because_ol_10_11_still_has_it(tmp_path):
+    """10.11 still decodes 16x here (512 px tiles from 2048 px chunks): the store's problem, not the
+    viewer's, and like any store FAIL it can be accepted for a while as a known issue."""
     path = build(tmp_path / "s.zarr", shape=(4096, 4096), chunks=(2048, 2048), shards=(4096, 4096), write_data=False, dtype="uint16")
     cfg = copy.deepcopy(CFG) | {"sample_variables": ["oa08_radiance"], "dtype_allow": ["uint16"]}
     for consumers in ({"sentinel-explorer": "10.10.0"}, {"upstream": "10.11.0"}):
         cfg["consumers"] = {"openlayers": consumers}
         st07 = run(path, cfg)["ST07"]
-        assert st07.status == FAIL and "no OpenLayers release avoids it (ol 10.11: 16x)" in st07.evidence[0], st07.evidence[:1]
+        assert st07.status == FAIL and "ol 10.11, the newest modelled release, still decodes 16.0x" in st07.evidence[0], st07.evidence[:1]
+    apply_known_issues([st07], [{"check": "ST07", "match": "still decodes", "ref": "x", "until": "2026-12-31"}], dt.date(2026, 10, 8))
+    assert st07.status == KNOWN
 
 
 def test_partial_scene_does_not_false_fail_st09(tmp_path):
