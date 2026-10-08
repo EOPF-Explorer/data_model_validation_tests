@@ -29,9 +29,9 @@ rescale = ["10,300", "22,345", "36,390"]
 "0.11" = { group = "/measurements/r0", extra = { bidx = "1" } }  # the registered xyz/tilejson link form
 
 [endpoints]
-# `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs 0.12
-# code (sha-5fbea81) but reports 0.11.0: its pyproject predates the 0.12.0 bump. Confirmed live 6 Oct.
-rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.11.0" }
+# `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs
+# titiler-eopf v0.12.2 (73b01a5) since 8 Oct.
+rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.12.2" }
 raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11", expect_version = "0.11.1" }
 
 # `zooms` is an optional anchor: TI02 compares the tilejson with the range the store's own

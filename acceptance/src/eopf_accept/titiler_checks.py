@@ -2,8 +2,7 @@
 
 The URL syntax differs by API generation (failure class C8). `urls()` is the only place
 that knows it, and it keys on the endpoint's `api` ("0.12" or "0.11"), not on the
-version string: /rstaging runs 0.12 code but reports "0.11.0" (sha-5fbea81 predates the
-release commit that bumped pyproject).
+version string, which has lagged the code (until 8 Oct /rstaging ran 0.12 code that reported "0.11.0").
 - 0.12: STAC item route `?assets=<asset>|bands=a,b,c`, or asset route
   `/assets/<asset>/…?variables=a&variables=b`, plus optional extras such as `bidx=1`.
 - 0.11: item route only, `?variables=/<group>:a`. The server ignores asset hrefs and
