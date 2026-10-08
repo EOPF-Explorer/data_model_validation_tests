@@ -96,10 +96,18 @@ match = "float64"
 ref = "OLCI radiance is stored as float64; data-model follow-up (uint16 + scale/offset, or float32)"
 until = "2026-12-31"
 
-# No known issue for /raster TI02 (retired 7 Oct, Loïc: "let's not diminish the value of the
-# test and fix what we need to fix so it passes"). Its premise was wrong: the minzoom = maxzoom
-# collapse is not titiler 0.11.1 but the link form. register_v1 (v1.15.0-s3olci-rc8,
-# _S3_OLCI_BASE_LEVEL = "r0") links the level group /measurements/r0, which has no multiscales,
-# so any titiler returns that level's zoom for both (reader.py get_minzoom, same in 0.11.1 and
-# 5fbea81). TI02 FAILs naming that mechanism until register_v1 links /measurements and the
-# "0.11" render above follows it (RG10 fails when the two differ).
+# /raster TI02: the minzoom = maxzoom collapse is the link form, not titiler 0.11.1.
+# register_v1 (v1.15.0-s3olci-rc8, _S3_OLCI_BASE_LEVEL = "r0") links the level group
+# /measurements/r0, which has no multiscales, so titiler returns that level's zoom for both
+# (reader.py get_minzoom, same in 0.11.1 and 5fbea81); /rstaging passes. The first known issue
+# (6 Oct) blamed titiler and was retired on 7 Oct. This one names the real cause and won't be
+# fixed on 0.11: the titiler-eopf >0.12 flip replaces these links (Loïc, 7 Oct, option b; RG05
+# lists the 0.11 links that 422 on /rstaging). It matches only that mechanism, on /raster only.
+[[known_issues]]
+check = "TI02"
+group = "titiler:raster"
+match = "the render reads level group measurements/r0, not the multiscales group measurements"
+ref = "register_v1 rc8 links /measurements/r0 on the 0.11 API; superseded by the titiler-eopf >0.12 flip"
+# A review date, not the flip date (unset on 8 Oct: confirmed when everything is ready to
+# flip). After it this is a FAIL again: extend it if the flip isn't ready, drop it once flipped.
+until = "2026-10-31"

@@ -1,11 +1,13 @@
 """The titiler battery against a fake server: each check fails when it should."""
 
 import datetime as dt
+import tomllib
 
 import pytest
 
 from eopf_accept.budget import Budget, Http
-from eopf_accept.model import FAIL, KNOWN, PASS, VOID, WARN, XFAIL, XPASS, apply_known_issues
+from eopf_accept.cli import CONFIG_DIR
+from eopf_accept.model import FAIL, KNOWN, PASS, VOID, WARN, XFAIL, XPASS, Result, apply_known_issues
 from eopf_accept.titiler_checks import TitilerBattery, extent_px, urls
 
 from .fake_titiler import State, serve
@@ -103,6 +105,29 @@ def test_issue1_r0_collapse_fails_with_its_mechanism_without_any_item_config(ser
     assert tiles == [5, 6, 7, 8, 9], tiles
     # every one of those tiles reads r0: the summary must not claim each level was read
     assert "all read from level group measurements/r0" in res["TI03"].summary, res["TI03"].summary
+
+
+def test_r0_collapse_is_one_problem_and_the_olci_known_issue_matches_it_on_raster_only(server):
+    """7 Oct, option (b): the r0 collapse stays on /raster until the titiler-eopf >0.12 flip.
+    With an item anchor equal to the store's range (canary 5–9, S3A 4–7), the anchor
+    comparison repeated the store comparison, so a known issue could never match every
+    problem. The real OLCI config's entry must turn exactly this into KNOWN, on /raster only,
+    and only until its date."""
+    state, base = server
+    state.api, state.zooms = "0.11", (9, 9)
+    cfg = {**CFG, "items": {ITEM: {"zooms": [5, 9]}}}
+    raster = TitilerBattery(Http(Budget(100)), "raster", {"base": base, **RASTER}, cfg, ITEM, zoom_oracle=ORACLE).ti02_tilejson()
+    assert raster.status == FAIL and len(raster.problems) == 1, raster.problems
+    assert "the render reads level group measurements/r0" in raster.problems[0]
+    olci = tomllib.loads((CONFIG_DIR / "sentinel-3-olci-l1-efr.toml").read_text())
+    known = [k for k in olci["known_issues"] if k["check"] == "TI02"]
+    assert [k["group"] for k in known] == ["titiler:raster"]
+    until = dt.date.fromisoformat(str(known[0]["until"]))
+    elsewhere = Result("TI02", "titiler:rstaging", FAIL, raster.summary, problems=list(raster.problems))
+    expired = Result("TI02", "titiler:raster", FAIL, raster.summary, problems=list(raster.problems))
+    apply_known_issues([raster, elsewhere], known, until)
+    apply_known_issues([expired], known, until + dt.timedelta(days=1))
+    assert (raster.status, elsewhere.status, expired.status) == (KNOWN, FAIL, FAIL)
 
 
 def test_issue1_other_mismatches_get_the_generic_text(server):
