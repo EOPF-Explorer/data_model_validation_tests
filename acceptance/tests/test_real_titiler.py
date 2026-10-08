@@ -6,7 +6,6 @@ without spatial:shape the real app's tilejson returns 500, and TI02 and TR01 mus
 Skipped unless the `reader` extra and uvicorn are installed.
 """
 
-import importlib.metadata
 import json
 import os
 import socket
@@ -30,6 +29,7 @@ from eopf_accept.store_checks import StoreContext  # noqa: E402
 from eopf_accept.storeio import StoreReader  # noqa: E402
 from eopf_accept.titiler_checks import TitilerBattery  # noqa: E402
 
+from .fake_titiler import VERSIONS  # noqa: E402
 from .geozarr_fixture import CFG, build  # noqa: E402
 
 ITEM = "S3B_FIXTURE"
@@ -105,7 +105,7 @@ def run_battery(base, store):
     oracle and the real app agree."""
     oracle = zooms.oracle(StoreContext(StoreReader(store, Budget(500)), CFG))
     http = Http(Budget(100))
-    ep = {"base": base, "api": "0.12", "expect_version": importlib.metadata.version("titiler.eopf")}  # what its /api reports
+    ep = {"base": base, "api": "0.12", "expect_version": VERSIONS["0.12"]}  # the pinned app must report what /rstaging is expected to
     return {r.id: r for r in TitilerBattery(http, "local-0.12", ep, CFG, ITEM, zoom_oracle=oracle).run()}
 
 

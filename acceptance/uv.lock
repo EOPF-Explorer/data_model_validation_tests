@@ -402,16 +402,16 @@ dev = [
 requires-dist = [
     { name = "geozarr-toolkit", specifier = "==0.1.2" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.27" },
-    { name = "morecantile", specifier = ">=7" },
+    { name = "morecantile", specifier = "==7.0.3" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "obstore", specifier = ">=0.11.1" },
+    { name = "obstore", specifier = "==0.11.1" },
     { name = "pillow", specifier = ">=10" },
     { name = "pydantic", specifier = ">=2.12" },
-    { name = "rasterio", specifier = ">=1.5" },
+    { name = "rasterio", specifier = "==1.5.0" },
     { name = "redis", marker = "extra == 'reader'" },
     { name = "titiler-eopf", marker = "extra == 'reader'", git = "https://github.com/EOPF-Explorer/titiler-eopf?rev=73b01a5a53896958da7bd70a9565cb0358a2dc2a" },
-    { name = "xarray", marker = "extra == 'reader'", specifier = ">=2026.4.0" },
-    { name = "zarr", extras = ["cast-value-rs"], specifier = ">=3.2.0" },
+    { name = "xarray", marker = "extra == 'reader'", specifier = "==2026.4.0" },
+    { name = "zarr", extras = ["cast-value-rs"], specifier = "==3.2.0" },
 ]
 provides-extras = ["reader"]
 

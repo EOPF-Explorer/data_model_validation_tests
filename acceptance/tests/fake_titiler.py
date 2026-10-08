@@ -3,14 +3,18 @@
 import io
 import json
 import threading
+import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, urlsplit
 
 import numpy as np
 from PIL import Image
 
+from eopf_accept.cli import CONFIG_DIR
+
 ASSET_ROUTE = "/collections/{collection_id}/items/{item_id}/assets/{asset_id}"
-VERSIONS = {"0.12": "0.12.2", "0.11": "0.11.1"}  # what /rstaging and /raster report
+# What /rstaging (api 0.12) and /raster (api 0.11) report, from the configs
+VERSIONS = {ep["api"]: ep["expect_version"] for ep in tomllib.loads((CONFIG_DIR / "sentinel-2-l2a.toml").read_text())["endpoints"].values()}
 
 
 class State:
@@ -79,7 +83,7 @@ def serve(state: State):
                 paths = {"/collections/{collection_id}/items/{item_id}/info": {}}
                 if state.api == "0.12":
                     paths[ASSET_ROUTE + "/info"] = {}
-                return self.send(200, json.dumps({"info": {"version": VERSIONS[state.api] if state.version is None else state.version}, "paths": paths}).encode(), "application/json")
+                return self.send(200, json.dumps({"info": {"version": VERSIONS.get(state.api, "") if state.version is None else state.version}, "paths": paths}).encode(), "application/json")
             if any(k == "variables" and v.startswith("/") for k, v in q) and state.api == "0.12" and not u.path.startswith("/rstaging/"):
                 return self.send(422, b'{"detail":"bad variables"}', "application/json")
             if "bands" in keys and "/assets/" in u.path:
