@@ -66,7 +66,8 @@ def test_a_healthy_store_passes_over_https_that_answers_403(bucket):
     srv, base = bucket
     ctx = StoreContext(StoreReader(f"{base}/bkt/s.zarr", Budget(500), forbidden_is_missing=True), CFG)
     res = {cid: fn(ctx) for cid, fn in CHECKS.items()}
-    assert {k: r.status for k, r in res.items()} == {k: PASS for k in CHECKS}, {k: r.summary for k, r in res.items()}
+    want = {k: SKIP if k.startswith("GR") else PASS for k in CHECKS}  # GR*: only for configs with a [generic] table
+    assert {k: r.status for k, r in res.items()} == want, {k: r.summary for k, r in res.items()}
     assert not [p for p in srv.paths if p.endswith((".zarray", ".zattrs", ".zgroup", ".zmetadata"))]
 
 

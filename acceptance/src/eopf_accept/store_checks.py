@@ -78,13 +78,40 @@ def _bounds_vs_bbox(transform, shape, bbox) -> str | None:
     return None
 
 
+EOPF_TOP_GROUPS = ("measurements", "conditions", "quality")
+SUBROOT_KEYS = ("open_groups", "multiscales_groups", "consolidated_groups")
+
+
+def _subroot_of(href: str) -> str | None:
+    """`/S01SIWGRD_…_065517/measurements/grd` -> `S01SIWGRD_…_065517`: the group that holds a
+    product's measurements/conditions/quality (a sub-root, data-model#291 Ex.2)."""
+    parts = [p for p in href.split("/") if p not in ("", ".")]
+    i = next((i for i, p in enumerate(parts) if p in EOPF_TOP_GROUPS), 0)
+    return "/".join(parts[:i]) or None
+
+
 class StoreContext:
     """Metadata read once and shared by the checks."""
 
     def __init__(self, reader: StoreReader, cfg: dict, item: str | None = None):
-        self.reader, self.cfg = reader, cfg
+        self.reader = reader
         self.root = reader.node("")
         self.nodes: dict[str, dict | None] = {"": self.root}
+        # A sub-root's name differs per product (S1: `S01SIWGRD_<start>_…_<id>`), so a config names
+        # it as `{subroot}` and says which asset of the root's own stac_discovery points into it.
+        self.subroot = self.subroot_problem = None
+        if asset := cfg.get("subroot_asset"):
+            href = (((_attrs(self.root).get("stac_discovery") or {}).get("assets") or {}).get(asset) or {}).get("href") or ""
+            self.subroot = _subroot_of(href)
+            if self.subroot is None:
+                self.subroot_problem = (f"sub-root unknown: the root's stac_discovery has no asset {asset!r} whose href "
+                                        f"lies under a sub-root (href {href!r})")
+            cfg = {**cfg, **{k: [g.replace("{subroot}", self.subroot or "{subroot}") for g in cfg[k]] for k in SUBROOT_KEYS if k in cfg}}
+        self.cfg = cfg
+        self.consolidated_groups: list[str] = list(cfg.get("consolidated_groups", []))
+        for g in [self.subroot, *self.consolidated_groups]:
+            if g and g not in self.nodes:
+                self.nodes[g] = reader.node(g)
         # A trailing "?" marks a group as optional (an S1 cube may have one orbit only).
         # Absent optional groups are dropped; if every listed group is optional and
         # absent, ST01 fails, because then there is nothing to open. An item can declare
@@ -123,14 +150,20 @@ class StoreContext:
 
 
 def st01_consolidated(ctx: StoreContext) -> Result:
+    """data-model#291: every root (Ex.1) or sub-root (Ex.2, `consolidation = "subroot"`) is
+    consolidated, and so is every group a STAC asset points to; plus what titiler opens."""
     fails, warns = [], []
+    at_subroot = ctx.cfg.get("consolidation") == "subroot"
+    if ctx.subroot_problem:
+        fails.append(ctx.subroot_problem)
     if not ctx.open_groups:
         fails.append(f"no group to open: every configured group is absent ({ctx.absent_optional})")
     if ctx.expected_groups is not None:
         present = set(ctx.open_groups) | set(ctx.ms_groups)
         fails += [f"{g}: the item config expects this group, the store doesn't have it" for g in ctx.expected_groups if g not in present]
         fails += [f"{g}: present, but the item config's groups {ctx.expected_groups} don't list it" for g in sorted(present - set(ctx.expected_groups))]
-    for g in dict.fromkeys(["", *ctx.open_groups, *ctx.ms_groups]):
+    roots = ([ctx.subroot] if ctx.subroot else []) if at_subroot else [""]
+    for g in dict.fromkeys([*roots, *ctx.open_groups, *ctx.ms_groups, *ctx.consolidated_groups]):
         node = ctx.nodes.get(g)
         label = g or "/"
         if node is None:
@@ -148,11 +181,13 @@ def st01_consolidated(ctx: StoreContext) -> Result:
             if cm is not None and asset not in cm:
                 fails.append(f"{g}: consolidated metadata does not list level {asset!r}")
     rows = [f"optional group(s) absent: {ctx.absent_optional}"] if ctx.absent_optional else []
+    if at_subroot:
+        rows.append(f"sub-root {ctx.subroot or '?'} checked instead of the root (data-model#291 Ex.2)")
     if fails:
         return Result("ST01", "store", FAIL, f"{len(fails)} group(s) missing, not consolidated or incomplete", fails + warns + rows, problems=fails)
     if warns:
         return Result("ST01", "store", WARN, f"{len(warns)} level group(s) without their own consolidated metadata", warns + rows)
-    return Result("ST01", "store", PASS, "root, opened and multiscales groups are consolidated", rows)
+    return Result("ST01", "store", PASS, f"{'sub-root' if at_subroot else 'root'}, opened, multiscales and listed groups are consolidated", rows)
 
 
 def st03_multiscales(ctx: StoreContext) -> Result:
@@ -162,6 +197,9 @@ def st03_multiscales(ctx: StoreContext) -> Result:
     fails, warns = [], []
     min_levels = int(ctx.cfg.get("min_levels", 2))
     for g in ctx.ms_groups:
+        if ctx.nodes.get(g) is None:
+            fails.append(f"{g}: the multiscales group is absent (no zarr.json)")
+            continue
         a = _attrs(ctx.nodes.get(g))
         decl = cv.declared(a)
         missing = [cv.NAME[u] for u in (cv.MULTISCALES, cv.SPATIAL, cv.PROJ) if u not in decl]
@@ -230,6 +268,10 @@ def _all_nodes(ctx: StoreContext) -> list[tuple[str, dict | None]]:
             nodes += [(f"{path}/{n}", m) for n, m in ctx.arrays(g, path).items()]
     seen = {p for p, _ in nodes}
     nodes += [(p, m) for p, m in sorted((_consolidated(ctx.root) or {}).items()) if p not in seen]
+    if ctx.subroot:
+        seen = {p for p, _ in nodes}
+        nodes += [(f"{ctx.subroot}/{p}", m) for p, m in sorted((_consolidated(ctx.nodes.get(ctx.subroot)) or {}).items())
+                  if f"{ctx.subroot}/{p}" not in seen]
     return nodes
 
 
@@ -295,7 +337,12 @@ def st12_convention_content(ctx: StoreContext) -> Result:
             try:
                 CONTENT_MODELS[u](a)
             except ValidationError as exc:
-                problems += [f"{path}: {cv.NAME[u]}: {'.'.join(map(str, e['loc'])) or 'attributes'}: {e['msg']}" for e in exc.errors()]
+                # spatial v0.1: spatial:dimensions is "Required: Yes on arrays; optional on groups"
+                # (README; the schema requires it only for node_type "array"). geozarr-toolkit's
+                # model requires it everywhere. Where titiler needs it on a group, ST03 FAILs.
+                errors = [e for e in exc.errors() if not (u == cv.SPATIAL and (node or {}).get("node_type") == "group"
+                                                          and tuple(e["loc"]) == ("spatial:dimensions",) and e["type"] == "missing")]
+                problems += [f"{path}: {cv.NAME[u]}: {'.'.join(map(str, e['loc'])) or 'attributes'}: {e['msg']}" for e in errors]
     if not problems:
         return Result("ST12", "store", PASS, f"{len(nodes)} nodes: spatial/proj/multiscales attributes valid (geozarr-toolkit)")
     return Result("ST12", "store", WARN, f"{len(problems)} invalid convention attribute(s) (geozarr-toolkit)", problems[:40] + ([f"... {len(problems) - 40} more"] if len(problems) > 40 else []))
@@ -444,8 +491,13 @@ def st09_data_present(ctx: StoreContext) -> Result:
 
 
 def ht02_open_without_listing(ctx: StoreContext) -> Result:
+    if not ctx.open_groups:
+        return Result("HT02", "host", SKIP, "no group to open (see ST01)")
     fails, rows = [], []
     for g in ctx.open_groups:
+        if ctx.nodes.get(g) is None:
+            fails.append(f"{g}: absent (no zarr.json; see ST01)")
+            continue
         try:
             grp = zarr.open_group(store=ctx.reader.zarr_store(g, allow_list=False), mode="r", zarr_format=3)
             n = len(list(grp.members(max_depth=None)))
@@ -455,6 +507,161 @@ def ht02_open_without_listing(ctx: StoreContext) -> Result:
         except FileNotFoundError as exc:
             fails.append(f"{g}: not found ({exc})")
     return Result("HT02", "host", FAIL if fails else PASS, fails[0] if fails else "every opened group opens without listing", fails + rows, problems=fails)
+
+
+# GR*: products from data-model's generic_rechunker (data-model#292): no multiscales; every leaf
+# group rechunked, sharded and encoded with one rule (eopf_geozarr conversion/utils.py
+# create_uniform_encoding). They run for configs with a `[generic]` table, on the arrays the
+# consolidation root lists (the root, or the sub-root with `consolidation = "subroot"`).
+COMPRESSORS = {"blosc", "zstd", "gzip"}
+
+
+def _generic_arrays(ctx: StoreContext, check_id: str) -> tuple[dict, str, dict] | Result:
+    """(the [generic] table, the consolidation root, its consolidated metadata), or the SKIP."""
+    gen = ctx.cfg.get("generic")
+    if not gen:
+        return Result(check_id, "store", SKIP, "not a generic_rechunker config (no [generic] table)")
+    g = ctx.subroot if ctx.cfg.get("consolidation") == "subroot" else ""
+    cm = _consolidated(ctx.nodes.get(g)) if g is not None else None
+    if not cm:
+        where = "the sub-root" if g is None else (g or "/")
+        return Result(check_id, "store", SKIP, f"{where}: no consolidated metadata lists the arrays (see ST01)")
+    return gen, g, cm
+
+
+def _layout(meta: dict) -> tuple[list | None, list, list[str]]:
+    """(shard shape or None, chunk shape inside the shard, codec names including the shard's own)."""
+    grid = list(meta["chunk_grid"]["configuration"]["chunk_shape"])
+    codecs = meta.get("codecs") or []
+    names = [c.get("name") for c in codecs]
+    shard = next((c for c in codecs if c.get("name") == "sharding_indexed"), None)
+    if shard is None:
+        return None, grid, names
+    return grid, list(shard["configuration"]["chunk_shape"]), names + [c.get("name") for c in shard["configuration"].get("codecs", [])]
+
+
+def _coordinates(cm: dict) -> set[str]:
+    """Paths of coordinate arrays: dimension names, and the CF `coordinates` an array or its group
+    declares (xarray reads both)."""
+    out = set()
+    for path, m in cm.items():
+        own = str((m.get("attributes") or {}).get("coordinates") or "").split()
+        if m.get("node_type") == "array":
+            parent = path.rpartition("/")[0]
+            names = set(m.get("dimension_names") or []) | set(own)
+        else:
+            parent, names = path, set(own)
+        out |= {f"{parent}/{n}" if parent else n for n in names}
+    return out
+
+
+def gr02_chunks_and_shards(ctx: StoreContext) -> Result:
+    """generic_rechunker's layout: every dimension chunked to min(spatial_chunk, size) (_rechunk_ds);
+    with sharding, "exactly one shard per array", each dimension the smallest multiple of its chunk
+    that covers the array (create_uniform_encoding). Coordinates stay unsharded and uncompressed
+    unless chunk_and_shard_coords is set; the 2-D ones (swath lat/lon) are reported."""
+    got = _generic_arrays(ctx, "GR02")
+    if isinstance(got, Result):
+        return got
+    gen, root, cm = got
+    size, sharded = int(gen["spatial_chunk"]), bool(gen.get("sharding", True))
+    coords = _coordinates(cm)
+    fails, warns, n = [], [], 0
+    for path, m in sorted(cm.items()):
+        if m.get("node_type") != "array" or not m.get("shape"):
+            continue
+        label = f"{root}/{path}" if root else path
+        shard, inner, names = _layout(m)
+        if path in coords:
+            if len(m["shape"]) >= 2 and not COMPRESSORS & set(names):
+                mb = math.prod(m["shape"]) * np.dtype(m["data_type"]).itemsize / 1e6 if isinstance(m.get("data_type"), str) else 0
+                warns.append(f"{label}: {len(m['shape'])}-D coordinate {m['shape']} stored uncompressed ({mb:.0f} MB) and unsharded (chunk_and_shard_coords off)")
+            continue
+        if shard is None and not COMPRESSORS & set(names):
+            # the writer's coordinate encoding, on an array nothing declares as a coordinate
+            warns.append(f"{label}: written like a coordinate (unsharded, uncompressed) but no CF `coordinates` attribute "
+                         f"names it, so readers see a data variable")
+            continue
+        n += 1
+        want = [min(size, d) for d in m["shape"]]
+        if inner != want:
+            fails.append(f"{label}: chunk {inner}, want {want} (min(spatial_chunk={size}, size) per dimension)")
+        if sharded:
+            want_shard = [math.ceil(d / c) * c for d, c in zip(m["shape"], inner)]
+            if shard is None:
+                fails.append(f"{label}: not sharded")
+            elif shard != want_shard:
+                fails.append(f"{label}: shard {shard}, want {want_shard} (one shard per array)")
+    if not n:
+        return Result("GR02", "store", SKIP, f"{root or '/'}: no data array to check", warns)
+    status = FAIL if fails else WARN if warns else PASS
+    summary = (f"{len(fails)} array(s) off the generic_rechunker layout" if fails else
+               f"{n} data arrays on the layout; {len(warns)} coordinate array(s) uncompressed or undeclared" if warns else
+               f"{n} data arrays chunked to {size}" + (", one shard each" if sharded else ""))
+    return Result("GR02", "store", status, summary, fails[:40] + warns[:20], problems=fails)
+
+
+def _fits(value, dtype: np.dtype) -> bool:
+    if dtype.kind not in "iu":
+        return True
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return False
+    info = np.iinfo(dtype)
+    return v.is_integer() and info.min <= v <= info.max
+
+
+def _same_fill(cf, zarr_fill) -> bool:
+    try:
+        a, b = float(cf), float(zarr_fill)
+    except (TypeError, ValueError):
+        return True  # complex or structured fills: not compared
+    return a == b or (math.isnan(a) and math.isnan(b))
+
+
+def gr03_encoding(ctx: StoreContext) -> Result:
+    """CF packing as create_uniform_encoding writes it: a packed variable keeps its integer dtype
+    with CF scale_factor/add_offset/_FillValue, or is packed by the scale_offset codec with no CF
+    scale attributes, never both (that decodes twice). _FillValue and the valid range must fit the
+    dtype. A zarr fill_value that differs from the CF _FillValue is reported: missing chunks read
+    as the zarr fill_value, and readers that take it as nodata mask a different value."""
+    got = _generic_arrays(ctx, "GR03")
+    if isinstance(got, Result):
+        return got
+    _, root, cm = got
+    fails, warns, n = [], [], 0
+    for path, m in sorted(cm.items()):
+        if m.get("node_type") != "array" or not isinstance(m.get("data_type"), str):
+            continue
+        try:
+            dtype = np.dtype(m["data_type"])
+        except TypeError:
+            continue
+        n += 1
+        label, a = (f"{root}/{path}" if root else path), m.get("attributes") or {}
+        _, _, names = _layout(m)
+        cf_scale = "scale_factor" in a or "add_offset" in a
+        if cf_scale and "scale_offset" in names:
+            fails.append(f"{label}: CF scale_factor/add_offset AND the scale_offset codec: decoded twice")
+        if cf_scale and dtype.kind == "f":
+            warns.append(f"{label}: CF scale attributes on a {dtype} array (packed variables keep their integer dtype)")
+        for key in ("_FillValue", "valid_min", "valid_max"):
+            if key in a and not _fits(a[key], dtype):
+                fails.append(f"{label}: {key} {a[key]!r} does not fit {dtype}")
+        if "valid_range" in a and not all(_fits(v, dtype) for v in a["valid_range"] or []):
+            fails.append(f"{label}: valid_range {a['valid_range']!r} does not fit {dtype}")
+        if "_FillValue" in a and not _same_fill(a["_FillValue"], m.get("fill_value")):
+            warns.append(f"{label}: zarr fill_value {m.get('fill_value')!r} != CF _FillValue {a['_FillValue']!r}")
+    if not n:
+        return Result("GR03", "store", SKIP, f"{root or '/'}: no array to check")
+    status = FAIL if fails else WARN if warns else PASS
+    summary = (fails[0] + (f" (+{len(fails) - 1} more)" if len(fails) > 1 else "") if fails else
+               f"{len(warns)} array(s) whose zarr fill_value or packing disagrees with CF" if warns else
+               f"{n} arrays: CF packing and fill values consistent")
+    shown = fails + warns
+    return Result("GR03", "store", status, summary, shown[:40] + ([f"... {len(shown) - 40} more"] if len(shown) > 40 else []),
+                  problems=fails)
 
 
 CHECKS = {
@@ -467,4 +674,6 @@ CHECKS = {
     "ST11": st11_declarations,
     "ST12": st12_convention_content,
     "HT02": ht02_open_without_listing,
+    "GR02": gr02_chunks_and_shards,
+    "GR03": gr03_encoding,
 }

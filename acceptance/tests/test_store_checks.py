@@ -8,7 +8,7 @@ import re
 import pytest
 
 from eopf_accept.budget import Budget
-from eopf_accept.model import FAIL, KNOWN, PASS, WARN, Result, apply_known_issues
+from eopf_accept.model import FAIL, KNOWN, PASS, SKIP, WARN, Result, apply_known_issues
 from eopf_accept.store_checks import CHECKS, StoreContext
 from eopf_accept.storeio import StoreReader
 
@@ -22,7 +22,8 @@ def run(path, cfg=CFG, budget=500):
 
 def test_healthy_store_passes_everything(tmp_path):
     res = run(build(tmp_path / "s.zarr"))
-    assert {k: r.status for k, r in res.items()} == {k: PASS for k in CHECKS}, {k: (r.status, r.evidence[:3]) for k, r in res.items()}
+    want = {k: SKIP if k.startswith("GR") else PASS for k in CHECKS}  # GR*: only for configs with a [generic] table
+    assert {k: r.status for k, r in res.items()} == want, {k: (r.status, r.evidence[:3]) for k, r in res.items()}
 
 
 def test_c2_unconsolidated_fails_st01_and_ht02(tmp_path):
