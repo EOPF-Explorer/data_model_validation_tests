@@ -245,7 +245,7 @@ def st03_multiscales(ctx: StoreContext) -> Result:
             if i in (0, len(levels) - 1) and not (in_layout or in_group):
                 which = "maxzoom" if i == 0 else "minzoom"
                 fails.append(f"{path}: no spatial:shape+spatial:transform in the layout entry or the group; {which} can't be derived, so tilejson without zoom params returns 500")
-            # titiler-eopf 0.12 (5fbea81) reads layout["spatial:transform"] with no fallback:
+            # titiler-eopf 0.12 (5fbea81 to v0.12.2) reads layout["spatial:transform"] with no fallback:
             # get_multiscale_level for every level, and _get_variable's
             # `attrs.get("spatial:transform", layout["spatial:transform"])` evaluates its default
             # first. A transform on the level group alone doesn't help: every tile returns 500.

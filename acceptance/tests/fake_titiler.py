@@ -10,11 +10,12 @@ import numpy as np
 from PIL import Image
 
 ASSET_ROUTE = "/collections/{collection_id}/items/{item_id}/assets/{asset_id}"
+VERSIONS = {"0.12": "0.12.2", "0.11": "0.11.1"}  # what /rstaging and /raster report
 
 
 class State:
     def __init__(self):
-        self.version = "0.12.2"  # what /rstaging reports
+        self.version: str | None = None  # None: what the deployment of `api` reports (VERSIONS)
         self.api = "0.12"  # which routes /api lists
         self.tilejson_status = 200
         self.zooms = (5, 9)  # tilejson minzoom, maxzoom
@@ -78,7 +79,7 @@ def serve(state: State):
                 paths = {"/collections/{collection_id}/items/{item_id}/info": {}}
                 if state.api == "0.12":
                     paths[ASSET_ROUTE + "/info"] = {}
-                return self.send(200, json.dumps({"info": {"version": state.version}, "paths": paths}).encode(), "application/json")
+                return self.send(200, json.dumps({"info": {"version": VERSIONS[state.api] if state.version is None else state.version}, "paths": paths}).encode(), "application/json")
             if any(k == "variables" and v.startswith("/") for k, v in q) and state.api == "0.12" and not u.path.startswith("/rstaging/"):
                 return self.send(422, b'{"detail":"bad variables"}', "application/json")
             if "bands" in keys and "/assets/" in u.path:

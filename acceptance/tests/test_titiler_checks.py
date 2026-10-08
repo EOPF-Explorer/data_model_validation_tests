@@ -15,7 +15,7 @@ from .geozarr_fixture import CFG
 
 ITEM = "S3B_TEST"
 RSTAGING = {"api": "0.12", "expect_version": "0.12.2"}
-RASTER = {"api": "0.11", "expect_version": "0.12.2"}  # the fake reports one version for both
+RASTER = {"api": "0.11", "expect_version": "0.11.1"}
 # zooms.oracle for an OLCI-shaped store whose multiscales give 5–9 (the fake tilejson's default)
 ORACLE = {"measurements": {"levels": [("measurements/r0", 9), ("measurements/r2", 8), ("measurements/r4", 7),
                                       ("measurements/r8", 6), ("measurements/r16", 5)], "range": (5, 9)}}
@@ -64,9 +64,9 @@ def test_version_guard_is_fail_closed(server):
 def test_version_guard_fingerprints_the_routes(server):
     """A 0.11 deployment that happens to report the expected string must still be refused."""
     state, base = server
-    state.api = "0.11"
+    state.api, state.version = "0.11", RSTAGING["expect_version"]
     res = battery(base).run()
-    assert len(res) == 1 and res[0].status == FAIL and "routes look like the 0.11 API" in res[0].summary
+    assert len(res) == 1 and res[0].status == FAIL and res[0].summary == "routes look like the 0.11 API, config says 0.12"
 
 
 def test_zoom_mismatch_shows_the_zooms_and_a_known_issue_is_scoped_to_its_endpoint(server):

@@ -6,6 +6,7 @@ without spatial:shape the real app's tilejson returns 500, and TI02 and TR01 mus
 Skipped unless the `reader` extra and uvicorn are installed.
 """
 
+import importlib.metadata
 import json
 import os
 import socket
@@ -104,7 +105,7 @@ def run_battery(base, store):
     oracle and the real app agree."""
     oracle = zooms.oracle(StoreContext(StoreReader(store, Budget(500)), CFG))
     http = Http(Budget(100))
-    ep = {"base": base, "api": "0.12", "expect_version": "0.12.2"}
+    ep = {"base": base, "api": "0.12", "expect_version": importlib.metadata.version("titiler.eopf")}  # what its /api reports
     return {r.id: r for r in TitilerBattery(http, "local-0.12", ep, CFG, ITEM, zoom_oracle=oracle).run()}
 
 

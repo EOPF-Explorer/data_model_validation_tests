@@ -1,7 +1,7 @@
 """The zoom range titiler-eopf should advertise for each multiscales group, computed from
 the store's own metadata (the TI02 oracle, 7 Oct review).
 
-Same arithmetic as titiler-eopf 5fbea81 `_get_zoom`: a level's array bounds, reprojected
+Same arithmetic as titiler-eopf `_get_zoom` (5fbea81, unchanged in v0.12.2): a level's array bounds, reprojected
 to WebMercatorQuad with calculate_default_transform, the coarser pixel side, then
 `zoom_for_res`. Shape and transform come from the layout entry when it has both, else
 from the level group (titiler's fallback in get_minzoom/get_maxzoom). Unlike titiler,
