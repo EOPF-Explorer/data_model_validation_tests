@@ -119,7 +119,7 @@ def test_gr_checks_skip_without_a_generic_table(tmp_path):
 def fake_ctx(arrays: dict):
     """GR02/GR03 read only the consolidation root's metadata: craft it directly."""
     cm = {name: {"node_type": "array", "chunk_grid": {"configuration": {"chunk_shape": m.pop("chunks")}}} | m for name, m in arrays.items()}
-    return SimpleNamespace(cfg={"generic": {"spatial_chunk": 16, "sharding": False}}, subroot=None,
+    return SimpleNamespace(cfg={"generic": {"spatial_chunk": 16, "sharding": False}}, subroot=None, ms_groups=[],
                            nodes={"": {"consolidated_metadata": {"metadata": cm}}})
 
 
@@ -155,3 +155,76 @@ def test_gr03_nan_fills_agree():
     ctx = fake_ctx({"wind": {"shape": [40, 50], "chunks": [16, 16], "data_type": "float32", "fill_value": "NaN",
                              "codecs": [{"name": "bytes"}], "attributes": {"_FillValue": np.nan}}})
     assert gr03_encoding(ctx).status == PASS
+
+
+# --- from the review of the first version -------------------------------------------------------
+
+def test_subroot_consolidation_without_its_asset_is_a_fail_not_a_pass(tmp_path):
+    cfg = s1_config()
+    del cfg["subroot_asset"]
+    _, res = run(build_s1(tmp_path / "s.zarr", overviews=True), cfg)
+    assert res["ST01"].status == FAIL and any("needs subroot_asset" in p for p in res["ST01"].problems)
+
+
+@pytest.mark.parametrize("href, want", [
+    (f"/{SUB}/measurements/grd", SUB),
+    (f"s3://bkt/run/P.zarr/{SUB}/measurements/grd", SUB),
+    ("https://host/x/P.zarr/osw/S01SIWOCN_X_VV/measurements/owi", "osw/S01SIWOCN_X_VV"),
+    ("/measurements/grd", None),
+])
+def test_the_sub_root_of_an_href(href, want):
+    from eopf_accept.store_checks import _subroot_of
+    assert _subroot_of(href) == want
+
+
+def test_subroot_is_replaced_in_every_group_path_and_dates_survive(tmp_path):
+    import datetime as dt
+    cfg = s1_config() | {"visible_groups": ["{subroot}/measurements"],
+                         "known_issues": [{"check": "ST03", "match": "x", "ref": "r", "until": dt.date(2026, 12, 31)}]}
+    ctx, _ = run(build_s1(tmp_path / "s.zarr", overviews=True), cfg)
+    assert ctx.cfg["visible_groups"] == [f"{SUB}/measurements"]
+    assert ctx.cfg["known_issues"][0]["until"] == dt.date(2026, 12, 31)
+
+
+def test_tr01_gets_the_resolved_config(tmp_path, monkeypatch):
+    from eopf_accept import cli, reader_check
+    seen = {}
+
+    def fake_tr01(store, cfg, center, absent):
+        seen["open_groups"] = cfg["open_groups"]
+        return reader_check.Result("TR01", "reader", PASS, "fake")
+
+    monkeypatch.setattr(reader_check, "tr01_local_reader", fake_tr01)
+    cli.main(["run", "--collection", "sentinel-1-l1-grd", "--stage", "scratch", "--groups", "reader",
+              "--store", build_s1(tmp_path / "s.zarr", overviews=True), "--out", str(tmp_path / "runs")])
+    assert seen["open_groups"] == [f"{SUB}/overviews"]
+
+
+def test_gr02_leaves_the_multiscales_pyramid_to_its_own_rule(tmp_path):
+    path = build_s1(tmp_path / "s.zarr", overviews=True, consolidate_sub=False)
+    zarr.open_group(path, mode="r+")[f"{SUB}/overviews"].create_array("grd", shape=(2, 20, 25), chunks=(2, 8, 8), dtype="uint16")
+    zarr.consolidate_metadata(path, path=SUB, zarr_format=3)
+    zarr.consolidate_metadata(path, path=f"{SUB}/measurements", zarr_format=3)
+    _, res = run(path, s1_config())
+    assert res["GR02"].status == PASS, res["GR02"].evidence
+
+
+def test_gr02_counts_numcodecs_compressors_and_warns_with_nothing_else_to_check():
+    ctx = fake_ctx({"a": {"shape": [40, 50], "chunks": [16, 16], "data_type": "uint16",
+                          "codecs": [{"name": "bytes"}, {"name": "numcodecs.zlib"}]}})
+    assert gr02_chunks_and_shards(ctx).status == PASS
+    ctx = fake_ctx({"lat": {"shape": [40, 50], "chunks": [40, 50], "data_type": "string", "codecs": [{"name": "vlen-utf8"}]},
+                    "v": {"shape": [40], "chunks": [40], "data_type": "uint8", "dimension_names": ["lat"],
+                          "codecs": [{"name": "bytes"}], "attributes": {"coordinates": "lat"}}})
+    res = gr02_chunks_and_shards(ctx)
+    assert res.status == WARN and "dtype 'string'" in " ".join(res.evidence)
+
+
+def test_gr03_64_bit_extremes_fit_and_a_scalar_valid_range_is_reported():
+    ctx = fake_ctx({"t": {"shape": [4], "chunks": [4], "data_type": "uint64", "fill_value": 18446744073709551615,
+                          "codecs": [{"name": "bytes"}], "attributes": {"_FillValue": 18446744073709551615}}})
+    assert gr03_encoding(ctx).status == PASS
+    ctx = fake_ctx({"t": {"shape": [4], "chunks": [4], "data_type": "uint8", "fill_value": 0,
+                          "codecs": [{"name": "bytes"}], "attributes": {"valid_range": 5}}})
+    res = gr03_encoding(ctx)
+    assert res.status == FAIL and "is not a [min, max] pair" in res.summary

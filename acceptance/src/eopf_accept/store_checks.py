@@ -8,6 +8,7 @@ the consolidated tree: an unconsolidated root would then yield nothing to check 
 
 import math
 import re
+from urllib.parse import urlparse
 
 import numpy as np
 import zarr
@@ -79,15 +80,28 @@ def _bounds_vs_bbox(transform, shape, bbox) -> str | None:
 
 
 EOPF_TOP_GROUPS = ("measurements", "conditions", "quality")
-SUBROOT_KEYS = ("open_groups", "multiscales_groups", "consolidated_groups")
 
 
 def _subroot_of(href: str) -> str | None:
     """`/S01SIWGRD_…_065517/measurements/grd` -> `S01SIWGRD_…_065517`: the group that holds a
-    product's measurements/conditions/quality (a sub-root, data-model#291 Ex.2)."""
-    parts = [p for p in href.split("/") if p not in ("", ".")]
+    product's measurements/conditions/quality (a sub-root, data-model#291 Ex.2). An absolute href
+    (`s3://bucket/…/P.zarr/S01…/measurements/grd`) counts from after the `.zarr` segment."""
+    parts = [p for p in urlparse(href).path.split("/") if p not in ("", ".")]
+    if zarr_at := [i for i, p in enumerate(parts) if p.endswith(".zarr")]:
+        parts = parts[zarr_at[-1] + 1:]
     i = next((i for i, p in enumerate(parts) if p in EOPF_TOP_GROUPS), 0)
     return "/".join(parts[:i]) or None
+
+
+def _with_subroot(value, subroot: str):
+    """`{subroot}` replaced in every string of a config (TOML dates and numbers kept as they are)."""
+    if isinstance(value, str):
+        return value.replace("{subroot}", subroot)
+    if isinstance(value, list):
+        return [_with_subroot(v, subroot) for v in value]
+    if isinstance(value, dict):
+        return {k: _with_subroot(v, subroot) for k, v in value.items()}
+    return value
 
 
 class StoreContext:
@@ -100,13 +114,16 @@ class StoreContext:
         # A sub-root's name differs per product (S1: `S01SIWGRD_<start>_…_<id>`), so a config names
         # it as `{subroot}` and says which asset of the root's own stac_discovery points into it.
         self.subroot = self.subroot_problem = None
+        if cfg.get("consolidation") == "subroot" and not cfg.get("subroot_asset"):
+            self.subroot_problem = 'consolidation = "subroot" needs subroot_asset to find the sub-root: nothing was checked'
         if asset := cfg.get("subroot_asset"):
             href = (((_attrs(self.root).get("stac_discovery") or {}).get("assets") or {}).get(asset) or {}).get("href") or ""
             self.subroot = _subroot_of(href)
             if self.subroot is None:
                 self.subroot_problem = (f"sub-root unknown: the root's stac_discovery has no asset {asset!r} whose href "
                                         f"lies under a sub-root (href {href!r})")
-            cfg = {**cfg, **{k: [g.replace("{subroot}", self.subroot or "{subroot}") for g in cfg[k]] for k in SUBROOT_KEYS if k in cfg}}
+            if self.subroot:  # every group path in the config: open/multiscales/visible groups, items, assets, render
+                cfg = _with_subroot(cfg, self.subroot)
         self.cfg = cfg
         self.consolidated_groups: list[str] = list(cfg.get("consolidated_groups", []))
         for g in [self.subroot, *self.consolidated_groups]:
@@ -121,7 +138,7 @@ class StoreContext:
         names = [g.rstrip("?") for g in cfg.get("open_groups", []) + cfg.get("multiscales_groups", [])]
         optional = {g.rstrip("?") for g in cfg.get("open_groups", []) + cfg.get("multiscales_groups", []) if g.endswith("?")}
         for g in dict.fromkeys(names):
-            node = reader.node(g)
+            node = self.nodes[g] if g in self.nodes else reader.node(g)
             if node is None and g in optional:
                 self.absent_optional.append(g)
             else:
@@ -513,7 +530,11 @@ def ht02_open_without_listing(ctx: StoreContext) -> Result:
 # group rechunked, sharded and encoded with one rule (eopf_geozarr conversion/utils.py
 # create_uniform_encoding). They run for configs with a `[generic]` table, on the arrays the
 # consolidation root lists (the root, or the sub-root with `consolidation = "subroot"`).
-COMPRESSORS = {"blosc", "zstd", "gzip"}
+NOT_COMPRESSING = {"bytes", "transpose", "crc32c", "sharding_indexed", "vlen-utf8", "vlen-bytes"}
+
+
+def _compressed(codec_names: list[str]) -> bool:
+    return bool(set(codec_names) - NOT_COMPRESSING)
 
 
 def _generic_arrays(ctx: StoreContext, check_id: str) -> tuple[dict, str, dict] | Result:
@@ -566,18 +587,25 @@ def gr02_chunks_and_shards(ctx: StoreContext) -> Result:
     gen, root, cm = got
     size, sharded = int(gen["spatial_chunk"]), bool(gen.get("sharding", True))
     coords = _coordinates(cm)
+    # multiscales groups (S1 `overviews`) are written by another path, for tiling: not this rule
+    pyramids = tuple(f"{g}/" for g in ctx.ms_groups)
     fails, warns, n = [], [], 0
     for path, m in sorted(cm.items()):
         if m.get("node_type") != "array" or not m.get("shape"):
             continue
         label = f"{root}/{path}" if root else path
+        if label.startswith(pyramids):
+            continue
         shard, inner, names = _layout(m)
         if path in coords:
-            if len(m["shape"]) >= 2 and not COMPRESSORS & set(names):
-                mb = math.prod(m["shape"]) * np.dtype(m["data_type"]).itemsize / 1e6 if isinstance(m.get("data_type"), str) else 0
-                warns.append(f"{label}: {len(m['shape'])}-D coordinate {m['shape']} stored uncompressed ({mb:.0f} MB) and unsharded (chunk_and_shard_coords off)")
+            if len(m["shape"]) >= 2 and not _compressed(names):
+                try:
+                    size_mb = f"{math.prod(m['shape']) * np.dtype(m['data_type']).itemsize / 1e6:.0f} MB"
+                except TypeError:
+                    size_mb = f"dtype {m.get('data_type')!r}"
+                warns.append(f"{label}: {len(m['shape'])}-D coordinate {m['shape']} stored uncompressed ({size_mb}) and unsharded (chunk_and_shard_coords off)")
             continue
-        if shard is None and not COMPRESSORS & set(names):
+        if shard is None and not _compressed(names):
             # the writer's coordinate encoding, on an array nothing declares as a coordinate
             warns.append(f"{label}: written like a coordinate (unsharded, uncompressed) but no CF `coordinates` attribute "
                          f"names it, so readers see a data variable")
@@ -593,7 +621,8 @@ def gr02_chunks_and_shards(ctx: StoreContext) -> Result:
             elif shard != want_shard:
                 fails.append(f"{label}: shard {shard}, want {want_shard} (one shard per array)")
     if not n:
-        return Result("GR02", "store", SKIP, f"{root or '/'}: no data array to check", warns)
+        return Result("GR02", "store", WARN if warns else SKIP, f"{root or '/'}: no data array to check" +
+                      (f"; {len(warns)} coordinate array(s) uncompressed or undeclared" if warns else ""), warns)
     status = FAIL if fails else WARN if warns else PASS
     summary = (f"{len(fails)} array(s) off the generic_rechunker layout" if fails else
                f"{n} data arrays on the layout; {len(warns)} coordinate array(s) uncompressed or undeclared" if warns else
@@ -604,12 +633,18 @@ def gr02_chunks_and_shards(ctx: StoreContext) -> Result:
 def _fits(value, dtype: np.dtype) -> bool:
     if dtype.kind not in "iu":
         return True
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return False
+    if isinstance(value, int) and not isinstance(value, bool):
+        v = value  # as an int: a float can't hold uint64's max exactly
+    else:
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return False
+        if not f.is_integer():
+            return False
+        v = int(f)
     info = np.iinfo(dtype)
-    return v.is_integer() and info.min <= v <= info.max
+    return info.min <= v <= info.max
 
 
 def _same_fill(cf, zarr_fill) -> bool:
@@ -649,8 +684,12 @@ def gr03_encoding(ctx: StoreContext) -> Result:
         for key in ("_FillValue", "valid_min", "valid_max"):
             if key in a and not _fits(a[key], dtype):
                 fails.append(f"{label}: {key} {a[key]!r} does not fit {dtype}")
-        if "valid_range" in a and not all(_fits(v, dtype) for v in a["valid_range"] or []):
-            fails.append(f"{label}: valid_range {a['valid_range']!r} does not fit {dtype}")
+        if "valid_range" in a:
+            vr = a["valid_range"]
+            if not (isinstance(vr, list) and len(vr) == 2):
+                fails.append(f"{label}: valid_range {vr!r} is not a [min, max] pair")
+            elif not all(_fits(v, dtype) for v in vr):
+                fails.append(f"{label}: valid_range {vr!r} does not fit {dtype}")
         if "_FillValue" in a and not _same_fill(a["_FillValue"], m.get("fill_value")):
             warns.append(f"{label}: zarr fill_value {m.get('fill_value')!r} != CF _FillValue {a['_FillValue']!r}")
     if not n:

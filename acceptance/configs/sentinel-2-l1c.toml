@@ -40,7 +40,7 @@ raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11"
 api = "0.12"
 name = "item route, assets=reflectance|bands=…"
 path = "WebMercatorQuad/tilejson.json"
-params = [["assets", "reflectance|bands=b04,b03,b02"], ["rescale", "0,0.3"]]
+params = [["assets", "reflectance|bands=b04,b03,b02"], ["rescale", "0,1"]]
 expect = 200
 ref = "URL contract, 29 Sep"
 
@@ -48,7 +48,7 @@ ref = "URL contract, 29 Sep"
 api = "0.12"
 name = "asset route, variables="
 path = "assets/reflectance/WebMercatorQuad/tilejson.json"
-params = [["variables", "b04"], ["rescale", "0,0.3"]]
+params = [["variables", "b04"], ["rescale", "0,1"]]
 expect = 200
 ref = "URL contract, 29 Sep"
 

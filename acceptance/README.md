@@ -55,9 +55,9 @@ uv run eopf-accept run  --collection sentinel-2-l2a --stage scratch --store $B/<
 - At `--stage scratch`, an unsigned reader counts a 403 as a missing key: a bucket without
   list rights answers 403, not 404. The report lists each such key, because a key refused for
   another reason looks the same. A signed reader, and any registered run, still fails on 403.
-- `--collection` only picks the config: `sentinel-2-l2a`, `sentinel-2-l1c`, `sentinel-1-l1-grd`
-  (`generic_rechunker` output, a draft; it expects the `overviews` data-model#249 lists, which
-  the #292 products don't have yet, so it FAILs on them). A check with nothing to examine
+- `--collection` only picks the config (`configs/`). `sentinel-1-l1-grd` is for
+  `generic_rechunker` output (a draft): it expects the `overviews` data-model#249 lists, which
+  the #292 products don't have yet, so it FAILs on them. A check with nothing to examine
   reports SKIP, never PASS.
 
 ## Safety

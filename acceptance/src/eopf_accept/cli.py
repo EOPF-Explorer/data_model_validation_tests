@@ -188,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
         if "reader" in groups:
             from .reader_check import tr01_local_reader
 
-            results.append(tr01_local_reader(args.store, cfg, center, ctx.absent_optional))
+            results.append(tr01_local_reader(args.store, ctx.cfg, center, ctx.absent_optional))
         item = footprint = None
         if "registration" in groups:
             item = rg.fetch_item(http, cfg["stac"], args.collection, args.item)
