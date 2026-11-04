@@ -45,7 +45,7 @@ testpaths = ["tests"]
 # Every package the suite shares with the /rstaging image resolves to the image's version, so the
 # store checks, the zoom oracle, TR01 and the real-app tests run the code /rstaging runs. This is the
 # uv.lock of titiler-eopf d7f86e88222d2fe3c1f09292ae105616dd057819 (the reader pin), which the image
-# installs with `uv sync --frozen` on Python 3.12 (.python-version). When the image moves, regenerate it
+# installs with `uv sync --locked` on Python 3.12 (.python-version). When the image moves, regenerate it
 # in a titiler-eopf checkout at the new commit:
 #   uv export --frozen --no-hashes --no-emit-project --no-dev --extra server --extra cache --extra openeo --no-header --no-annotate
 constraint-dependencies = [

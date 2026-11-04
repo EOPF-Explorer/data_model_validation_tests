@@ -176,23 +176,101 @@ def test_ti03_reads_the_stores_levels_on_the_item_route(server):
 FOOTPRINT = geo.bbox_polygon([-36.0, 34.0, -34.0, 36.0])
 
 
+CENTRE = lonlat_to_tile(*geo.interior_point(FOOTPRINT), 9)
+ELSEWHERE = [lonlat_to_tile(*p, 9) for p in geo.spread_points(FOOTPRINT)]  # z9 tiles a flat one is compared with
+
+
+def z9(*tiles, mode="flat"):
+    return {(9, x, y): mode for x, y in tiles}
+
+
 def test_ti03_a_flat_patch_is_not_a_constant_render(server):
-    """T33WWP's centre is saturated cloud at z13 and z12 (1 and 15 distinct values); the rest has over 150."""
+    """T33WWP's centre is bright (cloud or snow) at z13 and z12 (1 and 15 distinct values); the rest has over 150."""
     state, base = server
-    x, y = lonlat_to_tile(*geo.interior_point(FOOTPRINT), 9)
-    state.flat_tiles = {(9, x, y)}
+    state.tile_at = z9(CENTRE)
     r = by_id(battery(base, footprint=FOOTPRINT).run())["TI03"]
     assert r.status == PASS, r.evidence
-    assert any(e.startswith(f"z9 {x}/{y}: a flat patch") for e in r.evidence), r.evidence
+    assert any(e.startswith(f"z9 {CENTRE[0]}/{CENTRE[1]}: a flat patch") for e in r.evidence), r.evidence
+    assert "flat at the centre at z9, varied elsewhere" in r.summary, r.summary  # never looks like a clean pass
 
 
-def test_ti03_a_render_flat_everywhere_fails(server):
+def test_ti03_compares_a_flat_tile_with_every_spread_tile(server):
+    state, base = server
+    state.tile_at = z9(CENTRE, *ELSEWHERE[:3])
+    assert by_id(battery(base, footprint=FOOTPRINT).run())["TI03"].status == PASS
+
+
+def test_ti03_a_render_flat_everywhere_fails_and_says_what_it_compared(server):
     state, base = server
     state.tile = "flat"
+    b = battery(base, footprint=FOOTPRINT)
+    b.ti02_tilejson()
+    state.requests.clear()
+    r = b.ti03_tiles()
+    assert r.status == FAIL
+    assert f"z9 {CENTRE[0]}/{CENTRE[1]}: only 1 distinct values, and none of the 4 other tile(s) tried varies with enough valid pixels (a constant render?)" in r.problems, r.problems
+    # at z5 the whole footprint is one tile: nothing was compared, and the report says so
+    assert any(p.startswith("z5 ") and "no other tile at this zoom to compare" in p for p in r.problems), r.problems
+    assert sum("/tiles/WebMercatorQuad/5/" in p for p in state.requests) == 1  # the flat tile isn't asked for twice
+
+
+def test_ti03_a_tile_with_few_valid_pixels_cant_clear_a_flat_one(server):
+    state, base = server
+    state.tile_at = z9(CENTRE) | z9(*ELSEWHERE, mode="sparse")  # 5 % valid, plenty of distinct values
     r = by_id(battery(base, footprint=FOOTPRINT).run())["TI03"]
-    assert r.status == FAIL and "no other part of the footprint varies (a constant render?)" in r.summary, r.summary
-    # z9 has other tiles to try; at z5 the whole footprint is one tile, so it can't tell the two apart
-    assert any(p.startswith("z9 ") for p in r.problems), r.problems
+    assert r.status == FAIL and any("none of the 4 other tile(s) tried" in p for p in r.problems), r.problems
+
+
+def test_ti03_reports_a_failed_tile_it_compared(server):
+    state, base = server
+    state.tile_at = z9(CENTRE) | z9(ELSEWHERE[0], mode="error")  # the next tile varies, the 500 still counts
+    r = by_id(battery(base, footprint=FOOTPRINT).run())["TI03"]
+    assert r.status == FAIL and len(r.problems) == 1 and "HTTP 500" in r.problems[0], r.problems
+    assert any("a flat patch" in e for e in r.evidence), r.evidence
+    state.tile_at = z9(CENTRE) | z9(*ELSEWHERE, mode="error")  # server errors, not a flat footprint
+    r = by_id(battery(base, footprint=FOOTPRINT).run())["TI03"]
+    assert r.status == FAIL and "HTTP 500" in r.summary and not any("constant render" in p for p in r.problems), r.problems
+
+
+def test_ti04_takes_its_zoom_from_the_stores_levels(server):
+    state, base = server
+    state.zooms = (0, 24)
+    cfg = {**CFG, "render": {**CFG["render"], "0.12": {"route": "item", "asset": "radianceData"}}}
+    r = by_id(battery(base, cfg=cfg).run())["TI04"]
+    assert r.status == PASS and r.summary.startswith("RGB tile z7"), r.summary
+
+
+def test_ti04_a_grey_patch_is_not_one_variable_served_three_times(server):
+    """A cloud that clips in all three bands is grey there; a render with one band is grey everywhere."""
+    state, base = server
+    state.zooms = (8, 10)
+    oracle = {"measurements": {"levels": [("measurements/r0", 10), ("measurements/r2", 9), ("measurements/r4", 8)], "range": (8, 10)}}
+    state.tile_at = z9(CENTRE, mode="gray")
+    r = by_id(battery(base, footprint=FOOTPRINT, oracle=oracle).run())["TI04"]
+    assert r.status == PASS and "grey at the centre" in r.summary, r.summary
+    state.tile_at = z9(CENTRE, mode="gray") | z9(ELSEWHERE[0], mode="error")
+    r = by_id(battery(base, footprint=FOOTPRINT, oracle=oracle).run())["TI04"]
+    assert r.status == FAIL and "HTTP 500" in r.summary, r.summary
+    state.tile_at, state.tile = {}, "gray"
+    r = by_id(battery(base, footprint=FOOTPRINT, oracle=oracle).run())["TI04"]
+    assert r.status == FAIL and "as have the 4 other tile(s) tried" in r.summary, r.summary
+
+
+def test_request_bound_covers_every_flat_tile_compared_elsewhere(server):
+    """`plan` promises an upper bound: the worst case is MAX_TILES levels, all flat, RGB flat too."""
+    state, base = server
+    state.tile, state.zooms = "flat", (10, 17)
+    levels = [(f"measurements/r{i}", z) for i, z in enumerate(range(17, 9, -1))]
+    state.requests.clear()
+    battery(base, footprint=FOOTPRINT, oracle={"measurements": {"levels": levels, "range": (10, 17)}}, budget=500).run()
+    assert sum("/tiles/" in p for p in state.requests) == (8 + 1) * 5  # TI03's levels and TI04, each with 4 more
+    assert len(state.requests) <= TitilerBattery.request_bound(CFG, "0.12")
+
+
+def test_spread_points_stay_inside_the_footprint():
+    triangle = {"type": "Polygon", "coordinates": [[[0, 0], [4, 0], [0, 4], [0, 0]]]}
+    points = geo.spread_points(triangle)
+    assert (3, 3) not in points and points and all(geo.contains(triangle, *p) for p in points)
 
 
 def test_item_render_extra_reaches_every_render(server):

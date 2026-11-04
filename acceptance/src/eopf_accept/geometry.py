@@ -18,6 +18,10 @@ def _rings(geometry: dict) -> list[list[list[float]]]:
     raise ValueError(f"unsupported geometry type {geometry['type']}")
 
 
+def _largest_ring(geometry: dict) -> list[list[float]]:
+    return max(_rings(geometry), key=lambda r: abs(_area(r)))
+
+
 def bbox_polygon(bounds) -> dict:
     w, s, e, n = bounds
     return {"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}
@@ -34,7 +38,7 @@ def contains(geometry: dict, lon: float, lat: float) -> bool:
 
 def interior_point(geometry: dict) -> tuple[float, float]:
     """A point inside the largest ring: its centroid if inside, else the ring point nearest it."""
-    ring = max(_rings(geometry), key=lambda r: abs(_area(r)))
+    ring = _largest_ring(geometry)
     cx, cy = _centroid(ring)
     if contains(geometry, cx, cy):
         return cx, cy
@@ -54,11 +58,13 @@ def interior_point(geometry: dict) -> tuple[float, float]:
     return best[1], best[2]
 
 
+SPREAD = ((1, 1), (3, 3), (1, 3), (3, 1))  # quarters of a bbox, the two farthest apart first
+
+
 def spread_points(geometry: dict) -> list[tuple[float, float]]:
-    """Up to four points inside the largest ring, spread over its bbox, the two farthest apart first."""
-    ring = max(_rings(geometry), key=lambda r: abs(_area(r)))
-    xs, ys = [p[0] for p in ring], [p[1] for p in ring]
-    points = [(min(xs) + (max(xs) - min(xs)) * i / 4, min(ys) + (max(ys) - min(ys)) * j / 4) for i, j in ((1, 1), (3, 3), (1, 3), (3, 1))]
+    """The SPREAD points of the largest ring's bbox that fall inside the geometry."""
+    xs, ys = zip(*_largest_ring(geometry))
+    points = [(min(xs) + (max(xs) - min(xs)) * i / 4, min(ys) + (max(ys) - min(ys)) * j / 4) for i, j in SPREAD]
     return [p for p in points if contains(geometry, *p)]
 
 

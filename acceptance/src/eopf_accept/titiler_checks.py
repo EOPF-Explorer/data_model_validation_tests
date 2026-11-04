@@ -23,7 +23,8 @@ from .model import FAIL, PASS, SKIP, VOID, WARN, XFAIL, XPASS, Result
 TMS = "WebMercatorQuad"
 ASSET_ROUTE = "/collections/{collection_id}/items/{item_id}/assets/{asset_id}"
 MAX_TILES = 8  # TI03 renders one tile per pyramid level, at most this many
-MAX_TILES_ELSEWHERE = 2  # and at most this many more for each level whose tile is flat
+TILES_ELSEWHERE = len(geo.SPREAD)  # what a flat TI03 tile or a grey TI04 tile is compared with, at most
+ITEM_ROUTE_ZOOMS = "the 0.12 STAC item route takes its zooms from rio-tiler's STAC reader, not from the store"
 
 
 def resolve_group(path: str, oracle: dict) -> tuple[str | None, str | None]:
@@ -35,14 +36,6 @@ def resolve_group(path: str, oracle: dict) -> tuple[str | None, str | None]:
     if isinstance(oracle.get(parent), dict) and path in dict(oracle[parent]["levels"]):
         return parent, path
     return None, None
-
-
-def expected_zooms(cfg: dict, api: str, oracle: dict | None):
-    """What this endpoint's render should advertise, per the store (render_levels), or the reason
-    it can't say. The 0.12 item route's tilejson doesn't come from the store."""
-    if oracle is not None and api != "0.11" and (cfg["render"].get(api) or {}).get("route") != "asset":
-        return "the 0.12 STAC item route takes its zooms from rio-tiler's STAC reader, not from the store"
-    return render_levels(cfg, api, oracle)
 
 
 def render_levels(cfg: dict, api: str, oracle: dict | None):
@@ -111,6 +104,10 @@ def extent_px(bounds, z: int) -> tuple[float, float]:
     return (e - w) / 360.0 * size, (merc_y(n) - merc_y(s)) / (2 * math.pi) * size
 
 
+def _bad_tile(z: int, x: int, y: int, r: httpx.Response) -> str:
+    return f"z{z} {x}/{y}: HTTP {r.status_code} {r.headers.get('content-type')} {r.text[:120] if r.status_code != 200 else ''}"
+
+
 def png_stats(content: bytes) -> dict:
     img = Image.open(io.BytesIO(content))
     a = np.asarray(img)
@@ -140,8 +137,9 @@ class TitilerBattery:
         self.group = f"titiler:{name}"
         self.center = center
         self.footprint = footprint  # STAC item geometry, when the item was fetched
-        self.expected = expected_zooms(cfg, self.api, zoom_oracle)  # zooms.oracle(StoreContext)
-        self.levels = render_levels(cfg, self.api, zoom_oracle)
+        self.levels = render_levels(cfg, self.api, zoom_oracle)  # zooms.oracle(StoreContext)
+        item_route = self.api != "0.11" and (cfg["render"].get(self.api) or {}).get("route") != "asset"
+        self.expected = ITEM_ROUTE_ZOOMS if zoom_oracle is not None and item_route else self.levels  # what TI02 compares with
         # which viewer the items link: 0.11 /viewer (OLCI) or map.html (S1); 0.12 map.html
         self.viewer_page = (cfg.get("viewer_page") or {}).get(self.api, "viewer" if self.api == "0.11" else "map.html")
         self.cache_headers: list[str] = []
@@ -249,23 +247,35 @@ class TitilerBattery:
             return item_center
         return list(geo.interior_point(self._footprint()))
 
-    def _varied_tile_elsewhere(self, prefix: str, params: list, z: int, tile: tuple[int, int], min_distinct: int) -> str | None:
-        """A flat tile is a patch if another part of the footprint varies at this zoom (a cloud
-        clips to white under the stretch); a constant render is flat everywhere."""
-        others = dict.fromkeys(lonlat_to_tile(lon, lat, z) for lon, lat in geo.spread_points(self._footprint()))
-        for x, y in [t for t in others if t != tile][:MAX_TILES_ELSEWHERE]:
-            r = self.get(f"{prefix}/tiles/{TMS}/{z}/{x}/{y}.png", params)
-            if r.status_code == 200 and "png" in r.headers.get("content-type", ""):
-                distinct = png_stats(r.content)["distinct"]
-                if distinct >= min_distinct:
-                    return f"{x}/{y} has {distinct} distinct values"
-        return None
+    def _tile(self, prefix: str, params: list, z: int, x: int, y: int) -> tuple[httpx.Response, dict | None]:
+        """One tile and its pixel stats; no stats unless it's a 200 PNG."""
+        r = self.get(f"{prefix}/tiles/{TMS}/{z}/{x}/{y}.png", params)
+        return r, png_stats(r.content) if r.status_code == 200 and "png" in r.headers.get("content-type", "") else None
+
+    def _compare_elsewhere(self, prefix: str, params: list, z: int, tile: tuple[int, int], good) -> tuple[tuple | None, int, list[str]]:
+        """Other tiles at this zoom, to tell a patch from the whole render: a bright cloud clips
+        under the stretch in one place, a constant render or one band served three times is the
+        same everywhere. Only the footprint's largest part is tried. Returns the first good tile as
+        (x, y, stats) or None, how many tiles were compared, and the requests that failed."""
+        compared, failed = 0, []
+        for x, y in dict.fromkeys(lonlat_to_tile(lon, lat, z) for lon, lat in geo.spread_points(self._footprint())):
+            if (x, y) == tile:
+                continue
+            r, st = self._tile(prefix, params, z, x, y)
+            if st is None:
+                failed.append(_bad_tile(z, x, y, r))
+                continue
+            compared += 1
+            if good(st, x, y):
+                return (x, y, st), compared, failed
+        return None, compared, failed
 
     def ti03_tiles(self) -> Result:
         """One tile per pyramid level (each level's zoom from the store), so every resolution
         is read; without the store, minzoom, middle and maxzoom of the tilejson. A render that
         reads one level group (the 0.11 r0 links) reads that level at every zoom, and the
-        summary says so. A flat tile only fails if the rest of the footprint is flat too."""
+        summary says so. A flat tile fails unless another tile at that zoom has both variety and
+        enough valid pixels; a tile that can't be read fails whichever one it is."""
         if not self.tilejson:
             return self.result("TI03", SKIP, "no usable tilejson (TI02)")
         lo, hi = self.tilejson["minzoom"], self.tilejson["maxzoom"]
@@ -273,7 +283,7 @@ class TitilerBattery:
         min_valid = float(self.cfg.get("min_valid", 0.25))
         min_distinct = int(self.cfg.get("min_distinct", 16))
         prefix, params = self._prefix(1)
-        fails, rows, metrics = [], [], {}
+        fails, rows, flat, metrics = [], [], [], {}
         per_level = not isinstance(self.levels, str)
         zooms = self.levels[4] if per_level else sorted({lo, (lo + hi) // 2, hi})
         if len(zooms) > MAX_TILES:
@@ -282,11 +292,10 @@ class TitilerBattery:
         exempt = zooms[0] if len(zooms) > 1 else None  # the coarsest tile is mostly outside the footprint
         for z in zooms:
             x, y = lonlat_to_tile(lon, lat, z)
-            r = self.get(f"{prefix}/tiles/{TMS}/{z}/{x}/{y}.png", params)
-            if r.status_code != 200 or "png" not in r.headers.get("content-type", ""):
-                fails.append(f"z{z} {x}/{y}: HTTP {r.status_code} {r.headers.get('content-type')} {r.text[:120] if r.status_code != 200 else ''}")
+            r, st = self._tile(prefix, params, z, x, y)
+            if st is None:
+                fails.append(_bad_tile(z, x, y, r))
                 continue
-            st = png_stats(r.content)
             # Require valid pixels in proportion to the tile's share of the footprint; at
             # minzoom, where the tile is mostly outside it, only "not all nodata".
             cover = geo.coverage(self._footprint(), z, x, y)
@@ -296,33 +305,46 @@ class TitilerBattery:
             if st["valid"] <= want:
                 fails.append(f"z{z} {x}/{y}: {st['valid']:.0%} valid pixels (want > {want:.0%})")
             elif st["distinct"] < min_distinct:
-                elsewhere = self._varied_tile_elsewhere(prefix, params, z, (x, y), min_distinct)
-                if elsewhere:
-                    rows.append(f"z{z} {x}/{y}: a flat patch ({st['distinct']} distinct values), not a constant render: z{z} {elsewhere}")
-                else:
-                    fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values, and no other part of the footprint varies (a constant render?)")
+                found, compared, failed = self._compare_elsewhere(prefix, params, z, (x, y), lambda o, ox, oy, z=z: (
+                    o["distinct"] >= min_distinct and o["valid"] > min_valid * geo.coverage(self._footprint(), z, ox, oy)))
+                fails += failed
+                if found:
+                    flat.append(z)
+                    rows.append(f"z{z} {x}/{y}: a flat patch ({st['distinct']} distinct values), not a constant render: z{z} {found[0]}/{found[1]} has {found[2]['distinct']} distinct values, {found[2]['valid']:.0%} valid")
+                elif compared:
+                    fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values, and none of the {compared} other tile(s) tried varies with enough valid pixels (a constant render?)")
+                elif not failed:
+                    fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values, and no other tile at this zoom to compare (a constant render?)")
         level = self.levels[2] if per_level else None
         which = (f"each pyramid level's zoom, all read from level group {level}" if level else
                  "one per pyramid level" if per_level else "tilejson min, mid, max")
-        return self.result("TI03", FAIL if fails else PASS, fails[0] if fails else f"tiles at z{', z'.join(map(str, zooms))} ({which}) decode with real pixels",
+        patches = f"; flat at the centre at z{', z'.join(map(str, flat))}, varied elsewhere" if flat else ""
+        return self.result("TI03", FAIL if fails else PASS, fails[0] if fails else f"tiles at z{', z'.join(map(str, zooms))} ({which}) decode with real pixels{patches}",
                            fails + rows, metrics, problems=fails)
 
     def ti04_rgb(self) -> Result:
+        """The RGB render at the store's middle level (without the store, the tilejson's). Grey at
+        the centre passes only if channels differ on another tile at that zoom."""
         if not self.tilejson or len(self.cfg["render"]["variables"]) < 3:
             return self.result("TI04", SKIP, "no tilejson or fewer than 3 render variables")
         lo, hi = self.tilejson["minzoom"], self.tilejson["maxzoom"]
-        z = (lo + hi + 1) // 2
+        z = (lo + hi + 1) // 2 if isinstance(self.levels, str) else self.levels[4][len(self.levels[4]) // 2]
         x, y = lonlat_to_tile(*self._center(), z)
         prefix, params = self._prefix(3)
-        r = self.get(f"{prefix}/tiles/{TMS}/{z}/{x}/{y}.png", params)
-        if r.status_code != 200:
-            return self.result("TI04", FAIL, f"RGB tile z{z} → HTTP {r.status_code}", [r.text[:300]])
-        st = png_stats(r.content)
+        r, st = self._tile(prefix, params, z, x, y)
+        if st is None:
+            return self.result("TI04", FAIL, f"RGB tile z{z} → HTTP {r.status_code} {r.headers.get('content-type')}", [r.text[:300]])
         if st["valid"] == 0:
             return self.result("TI04", FAIL, f"RGB tile z{z} has no valid pixels")
-        if st["same_channels"]:
-            return self.result("TI04", FAIL, "RGB tile has three identical channels (one variable served for all three?)")
-        return self.result("TI04", PASS, f"RGB tile z{z}: {st['mode']}, channels differ, {st['valid']:.0%} valid")
+        if not st["same_channels"]:
+            return self.result("TI04", PASS, f"RGB tile z{z}: {st['mode']}, channels differ, {st['valid']:.0%} valid")
+        found, compared, failed = self._compare_elsewhere(prefix, params, z, (x, y), lambda o, *_: o["valid"] > 0 and not o["same_channels"])
+        if failed:
+            return self.result("TI04", FAIL, f"RGB tile {failed[0]}", failed)
+        if not found:
+            others = f"as have the {compared} other tile(s) tried" if compared else "and no other tile at this zoom to compare"
+            return self.result("TI04", FAIL, f"RGB tile z{z} has three identical channels, {others} (one variable served for all three?)")
+        return self.result("TI04", PASS, f"RGB tile z{z}: grey at the centre, channels differ at {found[0]}/{found[1]}, {found[2]['valid']:.0%} valid")
 
     def ti06_viewer(self) -> Result:
         """The viewer page the collection's items link (`viewer_page` in the config, per API)."""
@@ -393,5 +415,5 @@ class TitilerBattery:
 
     @staticmethod
     def request_bound(cfg: dict, api: str) -> int:
-        # TI00 TI01 TI02 TI04 TI06 one each, TI03 up to MAX_TILES with their retries, TI07 one per contract row, 2 slack
-        return 7 + MAX_TILES * (1 + MAX_TILES_ELSEWHERE) + len([c for c in cfg.get("contract", []) if c["api"] == api])
+        # TI00 TI01 TI02 TI06 one each; TI03's MAX_TILES and TI04's tile, each compared with TILES_ELSEWHERE more; TI07 one per contract row; 2 slack
+        return 6 + (MAX_TILES + 1) * (1 + TILES_ELSEWHERE) + len([c for c in cfg.get("contract", []) if c["api"] == api])
