@@ -9,7 +9,7 @@ sample_variables = ["b04", "b03", "b02"]
 dtype_allow = ["uint16", "float32"]
 dtype_check_pattern = "^b(0[1-9]|1[0-2]|8a)$"   # b01–b12 and b8a
 min_valid = 0.25
-min_distinct = 16
+min_distinct = 5   # the bar 16 had at 0,0.3: 5 PNG levels at 0,1 span 0.0196 of reflectance, 16 at 0,0.3 span 0.0188. At 16 a healthy ocean scene fails (T27SVB, 2 Nov)
 
 stac = "https://api.explorer.eopf.copernicus.eu/stac"
 flip = { from = "/raster/", to = "/rstaging/" }    # RG05: does each item link also work on 0.12?
@@ -25,7 +25,9 @@ upstream = "10.11.0"            # first release with the largest-divisor tile si
 
 [render]
 variables = ["b04", "b03", "b02"]
-rescale = ["0,0.3", "0,0.3", "0,0.3"]
+rescale = ["0,1", "0,1", "0,1"]   # what the items link (data-pipeline scripts/register_v1.py); under 0,0.3 a cloud or snow scene renders as one colour (T25WFP, 2 Nov)
+# TI10: the Explorer's true colour for this collection (landing-page sentinel-explorer-config.js). 10 PNG levels at 0,0.5 span the same 0.0196.
+second_stretch = { name = "the Explorer's true colour", rescale = "0,0.5", min_distinct = 10 }
 "0.12" = { route = "item", asset = "reflectance" }
 "0.11" = { group = "/measurements/reflectance" }
 

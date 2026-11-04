@@ -1,17 +1,20 @@
 """The titiler battery against a fake server: each check fails when it should."""
 
 import datetime as dt
+import io
 import struct
 import tomllib
 import zlib
 
+import numpy as np
 import pytest
+from PIL import Image
 
-from eopf_accept import geometry as geo
+from eopf_accept import cli, geometry as geo
 from eopf_accept.budget import Budget, Http
 from eopf_accept.cli import CONFIG_DIR
 from eopf_accept.model import FAIL, KNOWN, PASS, VOID, WARN, XFAIL, XPASS, Result, apply_known_issues
-from eopf_accept.titiler_checks import TitilerBattery, decoded_stats, extent_px, lonlat_to_tile, urls
+from eopf_accept.titiler_checks import TitilerBattery, decoded_stats, extent_px, lonlat_to_tile, png_stats, urls
 
 from .fake_titiler import VERSIONS, State, serve
 from .geozarr_fixture import CFG
@@ -210,10 +213,125 @@ def test_ti03_a_render_flat_everywhere_fails_and_says_what_it_compared(server):
     state.requests.clear()
     r = b.ti03_tiles()
     assert r.status == FAIL
-    assert f"z9 {CENTRE[0]}/{CENTRE[1]}: only 1 distinct values, and none of the 4 other tile(s) tried varies with enough valid pixels (a constant render?)" in r.problems, r.problems
+    assert f"z9 {CENTRE[0]}/{CENTRE[1]}: only 1 distinct values, 100% of valid pixels at PNG value 200, and none of the 4 other tile(s) tried varies with enough valid pixels (a constant render, or values outside or too narrow for the stretch?)" in r.problems, r.problems
     # at z5 the whole footprint is one tile: nothing was compared, and the report says so
     assert any(p.startswith("z5 ") and "no other sample point of the footprint falls in another tile" in p for p in r.problems), r.problems
     assert sum("/tiles/WebMercatorQuad/5/" in p for p in state.requests) == 1  # the flat tile isn't asked for twice
+
+
+def test_png_stats_reports_the_commonest_value_and_its_share():
+    a = np.zeros((10, 10), np.uint8)
+    a[:7] = 255  # 70 pixels at 255, 30 at 0
+    buf = io.BytesIO()
+    Image.fromarray(a).save(buf, "PNG")
+    st = png_stats(buf.getvalue())
+    assert (st["modal"], round(st["modal_share"], 2)) == (255, 0.7)
+
+
+def test_ti03_with_nothing_to_compare_says_where_the_pixels_sit(server):
+    state, base = server
+    state.tile = "flat"
+    b = battery(base, footprint=FOOTPRINT)
+    b.ti02_tilejson()
+    z5 = next(p for p in b.ti03_tiles().problems if p.startswith("z5 "))
+    assert "100% of valid pixels at PNG value 200" in z5 and "too narrow for the stretch" in z5, z5
+
+
+L2A = tomllib.loads((CONFIG_DIR / "sentinel-2-l2a.toml").read_text())
+
+
+def test_l2a_threshold_lets_dark_water_clear_a_flat_tile_but_not_a_flat_render(server):
+    """T27SVB, a healthy ocean scene, has 11 and 10 distinct values on its best tiles at 0,1."""
+    state, base = server
+    cfg = {**CFG, "min_distinct": L2A["min_distinct"]}
+    state.tile_at = z9(CENTRE) | z9(*ELSEWHERE, mode="dark")
+    assert by_id(battery(base, cfg=cfg, footprint=FOOTPRINT).run())["TI03"].status == PASS
+    state.tile_at, state.tile = {}, "flat"
+    assert by_id(battery(base, cfg=cfg, footprint=FOOTPRINT).run())["TI03"].status == FAIL
+
+
+EXPLORER = {"name": "the Explorer's true colour", "rescale": "0,0.5", "min_distinct": 10}
+SECOND = {**CFG, "render": {**CFG["render"], "second_stretch": EXPLORER}}
+
+
+def at_second_stretch(*tiles, mode="flat"):
+    return {(9, x, y, "0,0.5"): mode for x, y in tiles}
+
+
+def test_ti10_runs_only_where_a_config_names_a_second_stretch(server):
+    state, base = server
+    assert "TI10" not in by_id(battery(base, footprint=FOOTPRINT).run())
+    state.requests.clear()
+    r = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"]
+    assert r.status == PASS and "the Explorer's true colour" in r.summary and "0,0.5" in r.summary, r.summary
+    assert any("rescale=0%2C0.5" in p or "rescale=0,0.5" in p for p in state.requests), state.requests[:3]
+
+
+def test_ti10_warns_where_the_second_stretch_clips_and_ti03_is_unaffected(server):
+    """T25WFP, 100 % cloud: varied at the links' 0,1, flat at z13 under the Explorer's 0,0.5."""
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE, ELSEWHERE[0])
+    res = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())
+    assert res["TI10"].status == WARN and "z9" in res["TI10"].summary and "PNG value 200" in res["TI10"].summary, res["TI10"].summary
+    assert res["TI10"].problems == []
+    assert res["TI03"].status == PASS and "flat" not in res["TI03"].summary, res["TI03"].summary
+
+
+def test_ti10_a_flat_patch_is_not_a_warning(server):
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE)
+    r = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"]
+    assert r.status == PASS and "flat at the centre at z9" in r.summary, r.summary
+
+
+def test_ti10_judges_flatness_with_its_own_threshold(server):
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE, *ELSEWHERE, mode="dark")  # 11 distinct: clears 10, not 16
+    assert by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"].status == PASS
+    strict = {**CFG, "render": {**CFG["render"], "second_stretch": {**EXPLORER, "min_distinct": 16}}}
+    assert by_id(battery(base, cfg=strict, footprint=FOOTPRINT).run())["TI10"].status == WARN
+
+
+def test_ti10_a_tile_it_cant_read_fails(server):
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE, mode="error")
+    r = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"]
+    assert r.status == FAIL and "HTTP 500" in r.summary and r.problems, r.summary
+    state.tile_at = at_second_stretch(CENTRE) | at_second_stretch(ELSEWHERE[0], mode="error")
+    r = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"]
+    assert r.status == FAIL and "HTTP 500" in r.summary, r.summary
+
+
+def test_ti10_compares_a_flat_tile_with_one_other_tile_only(server):
+    """A WARN doesn't justify a level's worst case of four more renders on the shared cache."""
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE, ELSEWHERE[0])  # the second tile tried would vary
+    assert by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"].status == WARN
+
+
+def test_request_bound_covers_the_second_stretch():
+    assert TitilerBattery.request_bound(SECOND, "0.12") - TitilerBattery.request_bound(CFG, "0.12") == 8 * 2
+
+
+def test_every_flat_level_stays_within_the_bound_with_a_second_stretch(server):
+    state, base = server
+    state.tile, state.zooms = "flat", (10, 17)
+    levels = [(f"measurements/r{i}", z) for i, z in enumerate(range(17, 9, -1))]
+    state.requests.clear()
+    battery(base, cfg=SECOND, footprint=FOOTPRINT, oracle={"measurements": {"levels": levels, "range": (10, 17)}}, budget=500).run()
+    assert sum("/tiles/" in p for p in state.requests) == (8 + 1) * 5 + 8 * 2
+    assert len(state.requests) <= TitilerBattery.request_bound(SECOND, "0.12")
+
+
+def test_l2a_config_tests_the_links_stretch_and_the_explorers():
+    assert L2A["render"]["rescale"] == ["0,1", "0,1", "0,1"] and L2A["min_distinct"] == 5
+    assert L2A["render"]["second_stretch"]["rescale"] == "0,0.5" and L2A["render"]["second_stretch"]["min_distinct"] == 10
+
+
+def test_the_l2a_plan_with_both_endpoints_fits_the_default_budget(capsys):
+    cli.main(["plan", "--collection", "sentinel-2-l2a", "--stage", "scratch", "--store", "s3://ci/b/x.zarr", "--groups", "store,titiler",
+              "--endpoint", "a=http://127.0.0.1:9@0.12.4:0.12", "--endpoint", "b=http://127.0.0.1:9@0.11.1:0.11", "--item", "demo"])
+    assert "fits" in capsys.readouterr().out
 
 
 def test_ti03_a_tile_with_few_valid_pixels_cant_clear_a_flat_one(server):

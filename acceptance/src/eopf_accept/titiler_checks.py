@@ -118,9 +118,11 @@ def png_stats(content: bytes) -> dict:
     color = a[..., :-1] if has_alpha else a
     valid = alpha > 0
     vals = color[valid]
-    distinct = int(len(np.unique(vals.reshape(len(vals), -1), axis=0))) if len(vals) else 0
+    uniq, counts = np.unique(vals.reshape(len(vals), -1), axis=0, return_counts=True) if len(vals) else ([], [0])
+    distinct = len(uniq)
     same_channels = bool(color.shape[-1] >= 3 and len(vals) and (vals[:, 0] == vals[:, 1]).all() and (vals[:, 1] == vals[:, 2]).all())
-    return {"mode": img.mode, "size": img.size, "valid": float(valid.mean()), "distinct": distinct, "same_channels": same_channels}
+    return {"mode": img.mode, "size": img.size, "valid": float(valid.mean()), "distinct": distinct, "same_channels": same_channels,
+            "modal": int(uniq[int(np.argmax(counts))][0]) if distinct else None, "modal_share": float(max(counts) / max(len(vals), 1))}
 
 
 def decoded_stats(content: bytes) -> dict | None:
@@ -261,15 +263,15 @@ class TitilerBattery:
         r = self.get(f"{prefix}/tiles/{TMS}/{z}/{x}/{y}.png", params)
         return r, decoded_stats(r.content) if r.status_code == 200 and "png" in r.headers.get("content-type", "") else None
 
-    def _compare_elsewhere(self, prefix: str, params: list, z: int, tile: tuple[int, int], good) -> tuple[tuple | None, int, list[str]]:
+    def _compare_elsewhere(self, prefix: str, params: list, z: int, tile: tuple[int, int], good, limit: int = TILES_ELSEWHERE) -> tuple[tuple | None, int, list[str]]:
         """Other tiles at this zoom, to tell a patch from the whole render: a bright cloud clips
         under the stretch in one place, a constant render or one band served three times is the
-        same everywhere. Only the footprint's largest part is tried. Returns the first good tile as
-        (x, y, stats) or None, how many tiles were compared, and the requests that failed."""
+        same everywhere. So is a scene bright or dark on every tile tried. Only the footprint's
+        largest part is tried. Returns the first good tile as (x, y, stats) or None, how many tiles
+        were compared, and the requests that failed."""
         compared, failed = 0, []
-        for x, y in dict.fromkeys(lonlat_to_tile(lon, lat, z) for lon, lat in geo.spread_points(self._footprint())):
-            if (x, y) == tile:
-                continue
+        others = dict.fromkeys(lonlat_to_tile(lon, lat, z) for lon, lat in geo.spread_points(self._footprint()))
+        for x, y in [t for t in others if t != tile][:limit]:
             r, st = self._tile(prefix, params, z, x, y)
             if st is None:
                 failed.append(_bad_tile(z, x, y, r))
@@ -279,6 +281,29 @@ class TitilerBattery:
                 return (x, y, st), compared, failed
         return None, compared, failed
 
+    def _level_zooms(self) -> tuple[list[int], list[str]]:
+        """The zooms to render, one per pyramid level, and what the report should say about them.
+        Without the store, the tilejson's minzoom, middle and maxzoom; the item route's tilejson says
+        0-24 whatever the store holds, so there only its middle."""
+        lo, hi = self.tilejson["minzoom"], self.tilejson["maxzoom"]
+        notes = []
+        if not isinstance(self.levels, str):
+            zooms = self.levels[4]
+        elif self.item_route:
+            zooms = [(lo + hi) // 2]
+            notes.append(f"no store levels to render ({self.levels}), so one tile at the tilejson's middle zoom")
+        else:
+            zooms = sorted({lo, (lo + hi) // 2, hi})
+        if len(zooms) > MAX_TILES:
+            notes.append(f"{len(zooms)} levels; rendering {MAX_TILES} of them, spread from the coarsest to the finest")
+            zooms = sorted({zooms[round(i * (len(zooms) - 1) / (MAX_TILES - 1))] for i in range(MAX_TILES)})
+        return zooms, notes
+
+    def _varied(self, st: dict, z: int, x: int, y: int, min_distinct: int, exempt: int | None) -> bool:
+        """Variety and enough valid pixels; at the coarsest level, only "not all nodata"."""
+        min_valid = float(self.cfg.get("min_valid", 0.25))
+        return st["distinct"] >= min_distinct and st["valid"] > (0.0 if z == exempt else min_valid * geo.coverage(self._footprint(), z, x, y))
+
     def ti03_tiles(self) -> Result:
         """One tile per pyramid level (each level's zoom from the store), so every resolution
         is read; without the store, minzoom, middle and maxzoom of the tilejson. A render that
@@ -287,23 +312,13 @@ class TitilerBattery:
         enough valid pixels; a tile that can't be read fails whichever one it is."""
         if not self.tilejson:
             return self.result("TI03", SKIP, "no usable tilejson (TI02)")
-        lo, hi = self.tilejson["minzoom"], self.tilejson["maxzoom"]
         lon, lat = self._center()
         min_valid = float(self.cfg.get("min_valid", 0.25))
         min_distinct = int(self.cfg.get("min_distinct", 16))
         prefix, params = self._prefix(1)
-        fails, rows, flat, metrics = [], [], [], {}
         per_level = not isinstance(self.levels, str)
-        if per_level:
-            zooms = self.levels[4]
-        elif self.item_route:  # the item route's tilejson says 0-24: its ends test nothing
-            zooms = [(lo + hi) // 2]
-            rows.append(f"no store levels to render ({self.levels}), so one tile at the tilejson's middle zoom")
-        else:
-            zooms = sorted({lo, (lo + hi) // 2, hi})
-        if len(zooms) > MAX_TILES:
-            rows.append(f"{len(zooms)} levels; rendering {MAX_TILES} of them, spread from the coarsest to the finest")
-            zooms = sorted({zooms[round(i * (len(zooms) - 1) / (MAX_TILES - 1))] for i in range(MAX_TILES)})
+        zooms, rows = self._level_zooms()
+        fails, flat, metrics = [], [], {}
         exempt = zooms[0] if len(zooms) > 1 else None  # the coarsest tile is mostly outside the footprint
         for z in zooms:
             x, y = lonlat_to_tile(lon, lat, z)
@@ -320,16 +335,16 @@ class TitilerBattery:
             if st["valid"] <= want:
                 fails.append(f"z{z} {x}/{y}: {st['valid']:.0%} valid pixels (want > {want:.0%})")
             elif st["distinct"] < min_distinct:
-                found, compared, failed = self._compare_elsewhere(prefix, params, z, (x, y), lambda o, ox, oy, z=z: (
-                    o["distinct"] >= min_distinct and o["valid"] > (0.0 if z == exempt else min_valid * geo.coverage(self._footprint(), z, ox, oy))))
+                found, compared, failed = self._compare_elsewhere(prefix, params, z, (x, y), 
+                                                               lambda o, ox, oy, z=z: self._varied(o, z, ox, oy, min_distinct, exempt))
                 fails += failed
                 if found:
                     flat.append(z)
                     rows.append(f"z{z} {x}/{y}: a flat patch ({st['distinct']} distinct values), not a constant render: z{z} {found[0]}/{found[1]} has {found[2]['distinct']} distinct values, {found[2]['valid']:.0%} valid")
                 elif compared:
-                    fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values, and none of the {compared} other tile(s) tried varies with enough valid pixels (a constant render?)")
+                    fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values, {st['modal_share']:.0%} of valid pixels at PNG value {st['modal']}, and none of the {compared} other tile(s) tried varies with enough valid pixels (a constant render, or values outside or too narrow for the stretch?)")
                 elif not failed:
-                    fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values, and no other sample point of the footprint falls in another tile, so nothing to compare (a constant render?)")
+                    fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values, {st['modal_share']:.0%} of valid pixels at PNG value {st['modal']}, and no other sample point of the footprint falls in another tile, so nothing to compare (a constant render, or values outside or too narrow for the stretch?)")
         level = self.levels[2] if per_level else None
         which = (f"each pyramid level's zoom, all read from level group {level}" if level else
                  "one per pyramid level" if per_level else "the tilejson's middle zoom" if self.item_route else "tilejson min, mid, max")
@@ -360,6 +375,44 @@ class TitilerBattery:
             others = f"as have the {compared} other tile(s) tried" if compared else "and no other sample point of the footprint falls in another tile"
             return self.result("TI04", FAIL, f"RGB tile z{z} has three identical channels, {others} (one variable served for all three?)")
         return self.result("TI04", PASS, f"RGB tile z{z}: grey at the centre, channels differ at {found[0]}/{found[1]}, {found[2]['valid']:.0%} valid")
+
+    def ti10_second_stretch(self) -> Result:
+        """The same levels under another consumer's stretch (`render.second_stretch`). TI03 decides
+        whether the render works; this shows where that consumer sees one flat colour. Flat is a
+        WARN, because a fully clouded scene clipping isn't a store defect; a tile that can't be read
+        fails. One tile is compared per flat level: a WARN doesn't justify more renders."""
+        spec = self.cfg["render"]["second_stretch"]
+        if not self.tilejson:
+            return self.result("TI10", SKIP, "no usable tilejson (TI02)")
+        name = f"{spec['name']} ({spec['rescale']})"
+        min_distinct = int(spec["min_distinct"])
+        lon, lat = self._center()
+        prefix, params = self._prefix(1)
+        params = [("rescale", spec["rescale"]) if k == "rescale" else (k, v) for k, v in params]
+        zooms, rows = self._level_zooms()
+        exempt = zooms[0] if len(zooms) > 1 else None
+        fails, patches, clipped = [], [], []
+        for z in zooms:
+            x, y = lonlat_to_tile(lon, lat, z)
+            r, st = self._tile(prefix, params, z, x, y)
+            if st is None:
+                fails.append(_bad_tile(z, x, y, r))
+                continue
+            rows.append(f"z{z} {x}/{y}: {st['distinct']} distinct values, {st['valid']:.0%} valid")
+            if st["valid"] == 0 or st["distinct"] >= min_distinct:
+                continue
+            found, _, failed = self._compare_elsewhere(prefix, params, z, (x, y), lambda o, ox, oy, z=z: self._varied(o, z, ox, oy, min_distinct, exempt), limit=1)
+            fails += failed
+            if found:
+                patches.append(z)
+            elif not failed:
+                clipped.append(f"z{z} {x}/{y} has {st['distinct']} distinct values, {st['modal_share']:.0%} of valid pixels at PNG value {st['modal']}")
+        if fails:
+            return self.result("TI10", FAIL, fails[0], fails + rows, problems=fails)
+        if clipped:
+            return self.result("TI10", WARN, f"under {name}, {'; '.join(clipped)}: a viewer using this stretch shows one flat colour there", rows)
+        patch_note = f"; flat at the centre at z{', z'.join(map(str, patches))}, varied elsewhere" if patches else ""
+        return self.result("TI10", PASS, f"every level varies under {name}{patch_note}", rows)
 
     def ti06_viewer(self) -> Result:
         """The viewer page the collection's items link (`viewer_page` in the config, per API)."""
@@ -426,9 +479,13 @@ class TitilerBattery:
         if v.status != PASS:
             return [v]
         out = [v, self.ti01_info(), self.ti02_tilejson(), self.ti03_tiles(), self.ti04_rgb(), self.ti06_viewer(), self.ti07_contract(), self.ti09_fit_zoom()]
+        if self.cfg["render"].get("second_stretch"):
+            out.append(self.ti10_second_stretch())
         return out + [self.ti05_cold()]
 
     @staticmethod
     def request_bound(cfg: dict, api: str) -> int:
-        # TI00 TI01 TI02 TI06 one each; TI03's MAX_TILES and TI04's tile, each compared with TILES_ELSEWHERE more; TI07 one per contract row; 2 slack
-        return 6 + (MAX_TILES + 1) * (1 + TILES_ELSEWHERE) + len([c for c in cfg.get("contract", []) if c["api"] == api])
+        # TI00 TI01 TI02 TI06 one each; TI03's MAX_TILES and TI04's tile, each compared with TILES_ELSEWHERE more;
+        # TI10's MAX_TILES, each compared with one more, if the config has one; TI07 one per contract row; 2 slack
+        second = MAX_TILES * 2 if (cfg.get("render") or {}).get("second_stretch") else 0
+        return 6 + (MAX_TILES + 1) * (1 + TILES_ELSEWHERE) + second + len([c for c in cfg.get("contract", []) if c["api"] == api])
