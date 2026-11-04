@@ -1,7 +1,9 @@
 """The titiler battery against a fake server: each check fails when it should."""
 
 import datetime as dt
+import struct
 import tomllib
+import zlib
 
 import pytest
 
@@ -9,7 +11,7 @@ from eopf_accept import geometry as geo
 from eopf_accept.budget import Budget, Http
 from eopf_accept.cli import CONFIG_DIR
 from eopf_accept.model import FAIL, KNOWN, PASS, VOID, WARN, XFAIL, XPASS, Result, apply_known_issues
-from eopf_accept.titiler_checks import TitilerBattery, extent_px, lonlat_to_tile, urls
+from eopf_accept.titiler_checks import TitilerBattery, decoded_stats, extent_px, lonlat_to_tile, urls
 
 from .fake_titiler import VERSIONS, State, serve
 from .geozarr_fixture import CFG
@@ -210,7 +212,7 @@ def test_ti03_a_render_flat_everywhere_fails_and_says_what_it_compared(server):
     assert r.status == FAIL
     assert f"z9 {CENTRE[0]}/{CENTRE[1]}: only 1 distinct values, and none of the 4 other tile(s) tried varies with enough valid pixels (a constant render?)" in r.problems, r.problems
     # at z5 the whole footprint is one tile: nothing was compared, and the report says so
-    assert any(p.startswith("z5 ") and "no other tile at this zoom to compare" in p for p in r.problems), r.problems
+    assert any(p.startswith("z5 ") and "no other sample point of the footprint falls in another tile" in p for p in r.problems), r.problems
     assert sum("/tiles/WebMercatorQuad/5/" in p for p in state.requests) == 1  # the flat tile isn't asked for twice
 
 
@@ -240,7 +242,49 @@ def test_a_tile_that_cant_be_decoded_fails_its_check_and_the_battery_goes_on(ser
     assert res["TI03"].status == FAIL and "not a decodable PNG" in res["TI03"].summary, res["TI03"].summary
     assert res["TI06"].status == PASS  # the battery carried on
     state.tile_at, state.tile = {}, "corrupt"
-    assert by_id(battery(base, footprint=FOOTPRINT).run())["TI04"].status == FAIL
+    r = by_id(battery(base, footprint=FOOTPRINT).run())["TI04"]
+    assert r.status == FAIL and "not a decodable PNG" in r.summary and r.evidence == [], (r.summary, r.evidence)
+
+
+def test_decoded_stats_survives_whatever_pillow_raises():
+    ihdr = b"\x00\x00\x00\x05IHDR" + bytes(5)  # Pillow: ValueError, Truncated IHDR chunk
+    short = b"\x89PNG\r\n\x1a\n" + ihdr + struct.pack(">I", zlib.crc32(ihdr[4:]))
+    assert decoded_stats(short) is None and decoded_stats(b"<html></html>") is None and decoded_stats(b"") is None
+
+
+def test_a_body_that_cant_be_read_fails_its_check_and_the_battery_goes_on(server):
+    """A gateway's bad Content-Encoding raises httpx.DecodingError, which isn't a TransportError."""
+    state, base = server
+    state.tile_at = z9(CENTRE, mode="badgzip")
+    res = by_id(battery(base, footprint=FOOTPRINT).run())
+    assert res["TI03"].status == FAIL and "HTTP 599" in res["TI03"].summary and "DecodingError" in res["TI03"].summary, res["TI03"].summary
+    assert res["TI06"].status == PASS
+
+
+def test_ti03_says_why_it_has_no_store_levels_on_the_item_route(server):
+    """Unusable store metadata must not bring back z0 and z24, and the report gives the real reason."""
+    state, base = server
+    state.zooms = (0, 24)
+    cfg = {**CFG, "render": {**CFG["render"], "0.12": {"route": "item", "asset": "radianceData"}}}
+    b = battery(base, cfg=cfg, oracle={"measurements": "no proj:code"})
+    r2 = b.ti02_tilejson()
+    assert r2.status == WARN and any("no proj:code" in e for e in r2.evidence), r2.evidence
+    state.requests.clear()
+    r = b.ti03_tiles()
+    assert {int(p.split("/tiles/")[1].split("/")[1]) for p in state.requests} == {12}
+    assert r.status == PASS and "the tilejson's middle zoom" in r.summary and any("no proj:code" in e for e in r.evidence), (r.summary, r.evidence)
+
+
+def test_ti03_the_coarsest_levels_exemption_also_covers_the_tiles_it_compares(server):
+    """The coarsest tile only needs "not all nodata", and so do the tiles a flat one is compared with."""
+    state, base = server
+    wide = geo.bbox_polygon([-60.0, 10.0, -10.0, 50.0])  # several tiles at z5
+    centre = lonlat_to_tile(*geo.interior_point(wide), 5)
+    others = {lonlat_to_tile(*p, 5) for p in geo.spread_points(wide)} - {centre}
+    assert others
+    state.tile_at = {(5, *centre): "flat"} | {(5, *t): "sparse" for t in others}
+    r = by_id(battery(base, footprint=wide).run())["TI03"]
+    assert r.status == PASS and "flat at the centre at z5" in r.summary, (r.summary, r.evidence)
 
 
 def test_ti04_takes_its_zoom_from_the_stores_levels(server):

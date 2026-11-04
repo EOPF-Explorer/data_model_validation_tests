@@ -13,7 +13,7 @@ from . import geometry as geo
 from .budget import Http
 from .model import FAIL, PASS, SKIP, WARN, Result
 from .storeio import StoreReader
-from .titiler_checks import lonlat_to_tile, png_stats, resolve_group, urls
+from .titiler_checks import decoded_stats, lonlat_to_tile, resolve_group, urls
 
 LINK_RELS = ("viewer", "tilejson", "xyz")
 REQUEST_BOUND = 13  # item + 3 links + thumbnail, each once more for RG05, RG07's source item, plus slack
@@ -189,10 +189,9 @@ def _check_link(http: Http, rel: str, href: str, ztile, expected=None, footprint
             return 0, f"200 but {ctype!r}, not a PNG"
         if rel == "thumbnail" and not ctype.startswith("image/"):
             return 0, f"200 but {ctype!r}, not an image"
-        try:
-            st = png_stats(r.content)
-        except (OSError, SyntaxError) as exc:  # uncaught, this would stop the run and lose the titiler battery
-            return 0, f"200 but {ctype!r} that can't be decoded ({type(exc).__name__})"
+        st = decoded_stats(r.content)
+        if st is None:
+            return 0, f"200 but {ctype!r} that can't be decoded"
         if st["valid"] == 0:
             return 0, "200 but no valid pixels"
         return 200, f"200, {st['valid']:.0%} valid"
