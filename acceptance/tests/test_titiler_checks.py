@@ -232,6 +232,17 @@ def test_ti03_reports_a_failed_tile_it_compared(server):
     assert r.status == FAIL and "HTTP 500" in r.summary and not any("constant render" in p for p in r.problems), r.problems
 
 
+def test_a_tile_that_cant_be_decoded_fails_its_check_and_the_battery_goes_on(server):
+    """Uncaught, the decode error stopped the run at the CLI's outer handler and lost every later check."""
+    state, base = server
+    state.tile_at = z9(CENTRE, mode="corrupt")
+    res = by_id(battery(base, footprint=FOOTPRINT).run())
+    assert res["TI03"].status == FAIL and "not a decodable PNG" in res["TI03"].summary, res["TI03"].summary
+    assert res["TI06"].status == PASS  # the battery carried on
+    state.tile_at, state.tile = {}, "corrupt"
+    assert by_id(battery(base, footprint=FOOTPRINT).run())["TI04"].status == FAIL
+
+
 def test_ti04_takes_its_zoom_from_the_stores_levels(server):
     state, base = server
     state.zooms = (0, 24)

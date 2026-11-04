@@ -105,7 +105,7 @@ def extent_px(bounds, z: int) -> tuple[float, float]:
 
 
 def _bad_tile(z: int, x: int, y: int, r: httpx.Response) -> str:
-    return f"z{z} {x}/{y}: HTTP {r.status_code} {r.headers.get('content-type')} {r.text[:120] if r.status_code != 200 else ''}"
+    return f"z{z} {x}/{y}: HTTP {r.status_code} {r.headers.get('content-type')} {r.text[:120] if r.status_code != 200 else 'not a decodable PNG'}"
 
 
 def png_stats(content: bytes) -> dict:
@@ -248,9 +248,14 @@ class TitilerBattery:
         return list(geo.interior_point(self._footprint()))
 
     def _tile(self, prefix: str, params: list, z: int, x: int, y: int) -> tuple[httpx.Response, dict | None]:
-        """One tile and its pixel stats; no stats unless it's a 200 PNG."""
+        """One tile and its pixel stats; no stats unless it's a 200 PNG that decodes."""
         r = self.get(f"{prefix}/tiles/{TMS}/{z}/{x}/{y}.png", params)
-        return r, png_stats(r.content) if r.status_code == 200 and "png" in r.headers.get("content-type", "") else None
+        if r.status_code != 200 or "png" not in r.headers.get("content-type", ""):
+            return r, None
+        try:
+            return r, png_stats(r.content)
+        except (OSError, SyntaxError):  # uncaught, this would stop the run and lose the rest of the battery
+            return r, None
 
     def _compare_elsewhere(self, prefix: str, params: list, z: int, tile: tuple[int, int], good) -> tuple[tuple | None, int, list[str]]:
         """Other tiles at this zoom, to tell a patch from the whole render: a bright cloud clips

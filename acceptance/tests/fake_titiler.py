@@ -24,7 +24,7 @@ class State:
         self.tilejson_status = 200
         self.zooms = (5, 9)  # tilejson minzoom, maxzoom
         self.tile = "good"  # good | empty | gray | sparse (5 % valid) | flat (one value)
-        self.tile_at: dict[tuple[int, int, int], str] = {}  # (z, x, y) → a `tile` mode, or error (HTTP 500), for that tile only
+        self.tile_at: dict[tuple[int, int, int], str] = {}  # (z, x, y) → a `tile` mode, error (HTTP 500) or corrupt, for that tile only
         self.x_cache = "MISS"
         self.bounds = [-36.0, 34.0, -34.0, 36.0]
         self.force_status: int | None = None  # answer everything with this (503, 302)
@@ -107,6 +107,8 @@ def serve(state: State):
                 mode = state.tile_at.get(zxy, state.tile)
                 if mode == "error":
                     return self.send(500, b"Internal Server Error", "text/plain")
+                if mode == "corrupt":
+                    return self.send(200, b"<html>upstream error</html>", "image/png")
                 return self.send(200, _png(n, mode), "image/png")
             if u.path.endswith("/info"):
                 return self.send(200, json.dumps({"bounds": [-36, 34, -34, 36]}).encode(), "application/json")
