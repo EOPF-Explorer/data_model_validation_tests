@@ -1,4 +1,4 @@
-"""The battery against the REAL titiler-eopf app at v0.12.2 (the release /rstaging runs).
+"""The battery against the REAL titiler-eopf app at v0.12.4 (the release /rstaging runs).
 
 A one-item STAC stub stands in for /stac, so the app resolves the fixture store exactly
 as /rstaging resolves a registered item. This reproduces the 6 Oct OLCI bug end to end:
