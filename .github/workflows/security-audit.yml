@@ -1,0 +1,31 @@
+name: Security Audit
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Weekly, for advisories published since the last push to main.
+  schedule:
+    - cron: "23 6 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  security:
+    name: Security audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # Checkout and scan repository paths.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: developmentseed/action-python-security-auditing@74463a5e49cb840c1bf1604f748ffc9bece51171 # v1.0.1
+        with:
+          package_manager: uv
+          working_directory: acceptance
+          bandit_scan_dirs: src/
