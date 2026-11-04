@@ -264,7 +264,8 @@ def test_ti10_runs_only_where_a_config_names_a_second_stretch(server):
     state.requests.clear()
     r = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"]
     assert r.status == PASS and "the Explorer's true colour" in r.summary and "0,0.5" in r.summary, r.summary
-    assert any("rescale=0%2C0.5" in p or "rescale=0,0.5" in p for p in state.requests), state.requests[:3]
+    second = [p for p in state.requests if "rescale=0%2C0.5" in p or "rescale=0,0.5" in p]
+    assert second and all(p.count("rescale=") == 1 for p in second), second[:2]  # its stretch, not as well as TI03's
 
 
 def test_ti10_warns_where_the_second_stretch_clips_and_ti03_is_unaffected(server):
