@@ -110,7 +110,10 @@ def _bad_tile(z: int, x: int, y: int, r: httpx.Response) -> str:
 
 def png_stats(content: bytes) -> dict:
     img = Image.open(io.BytesIO(content))
-    a = np.asarray(img)
+    return _pixel_stats(img, np.asarray(img))
+
+
+def _pixel_stats(img: Image.Image, a: np.ndarray) -> dict:
     if a.ndim == 2:
         a = a[..., None]
     has_alpha = img.mode in ("LA", "RGBA", "PA")
@@ -127,11 +130,14 @@ def png_stats(content: bytes) -> dict:
 
 def decoded_stats(content: bytes) -> dict | None:
     """png_stats, or None for a body that doesn't decode. Pillow raises many things on bad bytes
-    (OSError, SyntaxError, ValueError, ...); none of them should stop the run and lose the rest."""
+    (OSError, SyntaxError, ValueError, ...); none of them should stop the run and lose the rest.
+    Only decoding is excused, so a bug in the statistics doesn't read as a bad server response."""
     try:
-        return png_stats(content)
+        img = Image.open(io.BytesIO(content))
+        a = np.asarray(img)
     except Exception:
         return None
+    return _pixel_stats(img, a)
 
 
 def api_fingerprint(openapi: dict) -> str:
@@ -335,8 +341,7 @@ class TitilerBattery:
             if st["valid"] <= want:
                 fails.append(f"z{z} {x}/{y}: {st['valid']:.0%} valid pixels (want > {want:.0%})")
             elif st["distinct"] < min_distinct:
-                found, compared, failed = self._compare_elsewhere(prefix, params, z, (x, y), 
-                                                               lambda o, ox, oy, z=z: self._varied(o, z, ox, oy, min_distinct, exempt))
+                found, compared, failed = self._compare_elsewhere(prefix, params, z, (x, y), lambda o, ox, oy: self._varied(o, z, ox, oy, min_distinct, exempt))
                 fails += failed
                 if found:
                     flat.append(z)
@@ -380,7 +385,8 @@ class TitilerBattery:
         """The same levels under another consumer's stretch (`render.second_stretch`). TI03 decides
         whether the render works; this shows where that consumer sees one flat colour. Flat is a
         WARN, because a fully clouded scene clipping isn't a store defect; a tile that can't be read
-        fails. One tile is compared per flat level: a WARN doesn't justify more renders."""
+        fails. It runs on one API, since whether data clips doesn't depend on the titiler version, and
+        compares one tile per flat level: a WARN doesn't justify more renders."""
         spec = self.cfg["render"]["second_stretch"]
         if not self.tilejson:
             return self.result("TI10", SKIP, "no usable tilejson (TI02)")
@@ -388,10 +394,10 @@ class TitilerBattery:
         min_distinct = int(spec["min_distinct"])
         lon, lat = self._center()
         prefix, params = self._prefix(1)
-        params = [("rescale", spec["rescale"]) if k == "rescale" else (k, v) for k, v in params]
+        params = [p for p in params if p[0] != "rescale"] + [("rescale", spec["rescale"])]
         zooms, rows = self._level_zooms()
         exempt = zooms[0] if len(zooms) > 1 else None
-        fails, patches, clipped = [], [], []
+        fails, patches, clipped, empty = [], [], [], []
         for z in zooms:
             x, y = lonlat_to_tile(lon, lat, z)
             r, st = self._tile(prefix, params, z, x, y)
@@ -399,9 +405,12 @@ class TitilerBattery:
                 fails.append(_bad_tile(z, x, y, r))
                 continue
             rows.append(f"z{z} {x}/{y}: {st['distinct']} distinct values, {st['valid']:.0%} valid")
-            if st["valid"] == 0 or st["distinct"] >= min_distinct:
+            if st["valid"] == 0:
+                empty.append(z)
                 continue
-            found, _, failed = self._compare_elsewhere(prefix, params, z, (x, y), lambda o, ox, oy, z=z: self._varied(o, z, ox, oy, min_distinct, exempt), limit=1)
+            if st["distinct"] >= min_distinct:
+                continue
+            found, _, failed = self._compare_elsewhere(prefix, params, z, (x, y), lambda o, ox, oy: self._varied(o, z, ox, oy, min_distinct, exempt), limit=1)
             fails += failed
             if found:
                 patches.append(z)
@@ -411,8 +420,11 @@ class TitilerBattery:
             return self.result("TI10", FAIL, fails[0], fails + rows, problems=fails)
         if clipped:
             return self.result("TI10", WARN, f"under {name}, {'; '.join(clipped)}: a viewer using this stretch shows one flat colour there", rows)
-        patch_note = f"; flat at the centre at z{', z'.join(map(str, patches))}, varied elsewhere" if patches else ""
-        return self.result("TI10", PASS, f"every level varies under {name}{patch_note}", rows)
+        if len(empty) == len(zooms):
+            return self.result("TI10", SKIP, f"no valid pixels at any level under {name}; TI03 judges that", rows)
+        notes = (f"; flat at the centre at z{', z'.join(map(str, patches))}, varied elsewhere" if patches else "") + (
+            f"; no valid pixels at z{', z'.join(map(str, empty))}, which TI03 judges" if empty else "")
+        return self.result("TI10", PASS, f"{'the other levels vary' if empty else 'every level varies'} under {name}{notes}", rows)
 
     def ti06_viewer(self) -> Result:
         """The viewer page the collection's items link (`viewer_page` in the config, per API)."""
@@ -479,13 +491,13 @@ class TitilerBattery:
         if v.status != PASS:
             return [v]
         out = [v, self.ti01_info(), self.ti02_tilejson(), self.ti03_tiles(), self.ti04_rgb(), self.ti06_viewer(), self.ti07_contract(), self.ti09_fit_zoom()]
-        if self.cfg["render"].get("second_stretch"):
+        if (self.cfg["render"].get("second_stretch") or {}).get("api") == self.api:
             out.append(self.ti10_second_stretch())
         return out + [self.ti05_cold()]
 
     @staticmethod
     def request_bound(cfg: dict, api: str) -> int:
         # TI00 TI01 TI02 TI06 one each; TI03's MAX_TILES and TI04's tile, each compared with TILES_ELSEWHERE more;
-        # TI10's MAX_TILES, each compared with one more, if the config has one; TI07 one per contract row; 2 slack
-        second = MAX_TILES * 2 if (cfg.get("render") or {}).get("second_stretch") else 0
+        # TI10's MAX_TILES, each compared with one more, on the API it runs on; TI07 one per contract row; 2 slack
+        second = MAX_TILES * 2 if ((cfg.get("render") or {}).get("second_stretch") or {}).get("api") == api else 0
         return 6 + (MAX_TILES + 1) * (1 + TILES_ELSEWHERE) + second + len([c for c in cfg.get("contract", []) if c["api"] == api])

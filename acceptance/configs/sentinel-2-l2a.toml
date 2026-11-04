@@ -27,7 +27,7 @@ upstream = "10.11.0"            # first release with the largest-divisor tile si
 variables = ["b04", "b03", "b02"]
 rescale = ["0,1", "0,1", "0,1"]   # what the items link (data-pipeline scripts/register_v1.py); under 0,0.3 a cloud or snow scene renders as one colour (T25WFP, 2 Nov)
 # TI10: the Explorer's true colour for this collection (landing-page sentinel-explorer-config.js). 10 PNG levels at 0,0.5 span the same 0.0196.
-second_stretch = { name = "the Explorer's true colour", rescale = "0,0.5", min_distinct = 10 }
+second_stretch = { name = "the Explorer's true colour", rescale = "0,0.5", min_distinct = 10, api = "0.12" }
 "0.12" = { route = "item", asset = "reflectance" }
 "0.11" = { group = "/measurements/reflectance" }
 

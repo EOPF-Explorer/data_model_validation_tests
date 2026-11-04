@@ -250,7 +250,7 @@ def test_l2a_threshold_lets_dark_water_clear_a_flat_tile_but_not_a_flat_render(s
     assert by_id(battery(base, cfg=cfg, footprint=FOOTPRINT).run())["TI03"].status == FAIL
 
 
-EXPLORER = {"name": "the Explorer's true colour", "rescale": "0,0.5", "min_distinct": 10}
+EXPLORER = {"name": "the Explorer's true colour", "rescale": "0,0.5", "min_distinct": 10, "api": "0.12"}
 SECOND = {**CFG, "render": {**CFG["render"], "second_stretch": EXPLORER}}
 
 
@@ -296,7 +296,46 @@ def test_ti10_doesnt_call_a_tile_with_no_valid_pixels_a_flat_colour(server):
     """Nodata isn't a colour a viewer shows, and TI03 already judges valid pixels."""
     state, base = server
     state.tile_at = at_second_stretch(CENTRE, ELSEWHERE[0], mode="empty")
-    assert by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"].status == PASS
+    r = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"]
+    assert r.status == PASS and "no valid pixels at z9" in r.summary and "every level varies" not in r.summary, r.summary
+
+
+def test_ti10_skips_when_no_level_has_valid_pixels(server):
+    state, base = server
+    b = battery(base, cfg=SECOND, footprint=FOOTPRINT)
+    b.ti02_tilejson()
+    state.tile = "empty"
+    assert b.ti10_second_stretch().status == "SKIP"
+
+
+def test_ti10_runs_on_its_configured_api_only(server):
+    """Whether this data clips at this stretch doesn't depend on the titiler version."""
+    state, base = server
+    state.api = "0.11"
+    res = by_id(battery(base, ep=RASTER, cfg=SECOND, footprint=FOOTPRINT).run())
+    assert "TI03" in res and "TI10" not in res, sorted(res)
+    assert TitilerBattery.request_bound(SECOND, "0.12") - TitilerBattery.request_bound(SECOND, "0.11") == 8 * 2
+
+
+def test_ti10_sends_its_stretch_even_if_the_render_has_none(server):
+    state, base = server
+    render = {k: v for k, v in SECOND["render"].items() if k != "rescale"}
+    b = battery(base, cfg={**CFG, "render": render}, footprint=FOOTPRINT)
+    b.ti02_tilejson()
+    state.requests.clear()
+    b.ti10_second_stretch()
+    tiles = [p for p in state.requests if "/tiles/" in p]
+    assert tiles and all("rescale=0" in p for p in tiles), tiles[:2]
+
+
+def test_decoded_stats_leaves_the_suites_own_bugs_visible(monkeypatch):
+    """Only decoding is excused: a bug in the statistics must not read as a bad server response."""
+    buf = io.BytesIO()
+    Image.fromarray(np.zeros((4, 4), np.uint8)).save(buf, "PNG")
+    assert decoded_stats(buf.getvalue())["distinct"] == 1
+    monkeypatch.setattr(np, "unique", lambda *a, **k: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        decoded_stats(buf.getvalue())
 
 
 def test_ti10_a_tile_it_cant_read_fails(server):
@@ -329,12 +368,16 @@ def test_every_flat_level_stays_within_the_bound_with_a_second_stretch(server):
 def test_l2a_config_tests_the_links_stretch_and_the_explorers():
     assert L2A["render"]["rescale"] == ["0,1", "0,1", "0,1"] and L2A["min_distinct"] == 5
     assert L2A["render"]["second_stretch"]["rescale"] == "0,0.5" and L2A["render"]["second_stretch"]["min_distinct"] == 10
+    assert L2A["render"]["second_stretch"]["api"] == "0.12"
 
 
-def test_the_l2a_plan_with_both_endpoints_fits_the_default_budget(capsys):
-    cli.main(["plan", "--collection", "sentinel-2-l2a", "--stage", "scratch", "--store", "s3://ci/b/x.zarr", "--groups", "store,titiler",
-              "--endpoint", "a=http://127.0.0.1:9@0.12.4:0.12", "--endpoint", "b=http://127.0.0.1:9@0.11.1:0.11", "--item", "demo"])
-    assert "fits" in capsys.readouterr().out
+def test_the_registered_l2a_plan_fits_the_default_budget(capsys):
+    """The README's registered form with both endpoints, the largest plan a user runs: registration
+    requests count too, and a plan over budget refuses to start."""
+    cli.main(["plan", "--collection", "sentinel-2-l2a", "--stage", "registered", "--store", "s3://ci/b/x.zarr", "--item", "demo",
+              "--endpoint", "a=http://127.0.0.1:9@0.12.4:0.12", "--endpoint", "b=http://127.0.0.1:9@0.11.1:0.11"])
+    out = capsys.readouterr().out
+    assert "registration" in out and "fits" in out and "REFUSED" not in out, out
 
 
 def test_ti03_a_tile_with_few_valid_pixels_cant_clear_a_flat_one(server):
