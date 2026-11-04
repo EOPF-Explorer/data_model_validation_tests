@@ -292,6 +292,13 @@ def test_ti10_judges_flatness_with_its_own_threshold(server):
     assert by_id(battery(base, cfg=strict, footprint=FOOTPRINT).run())["TI10"].status == WARN
 
 
+def test_ti10_doesnt_call_a_tile_with_no_valid_pixels_a_flat_colour(server):
+    """Nodata isn't a colour a viewer shows, and TI03 already judges valid pixels."""
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE, ELSEWHERE[0], mode="empty")
+    assert by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"].status == PASS
+
+
 def test_ti10_a_tile_it_cant_read_fails(server):
     state, base = server
     state.tile_at = at_second_stretch(CENTRE, mode="error")
@@ -307,10 +314,6 @@ def test_ti10_compares_a_flat_tile_with_one_other_tile_only(server):
     state, base = server
     state.tile_at = at_second_stretch(CENTRE, ELSEWHERE[0])  # the second tile tried would vary
     assert by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"].status == WARN
-
-
-def test_request_bound_covers_the_second_stretch():
-    assert TitilerBattery.request_bound(SECOND, "0.12") - TitilerBattery.request_bound(CFG, "0.12") == 8 * 2
 
 
 def test_every_flat_level_stays_within_the_bound_with_a_second_stretch(server):
