@@ -71,6 +71,25 @@ def test_a_webp_thumbnail_passes_and_a_non_image_fails(server, tmp_path):
     assert res["RG04"].status == FAIL and res["RG04"].problems == ["thumbnail: 200 but 'text/html; charset=utf-8', not an image"]
 
 
+@pytest.mark.parametrize("thumbnail, ctype", [("svg", "image/svg+xml"), ("corrupt", "image/webp"), ("truncated", "image/webp")])
+def test_a_thumbnail_that_cannot_be_decoded_fails_rg04_instead_of_crashing_the_run(server, tmp_path, thumbnail, ctype):
+    """A crash here stops the run at the CLI's outer handler and loses the whole titiler battery."""
+    state, base = server
+    item = item_for(base, build(tmp_path / "s.zarr"), now_iso(5))
+    state.thumbnail = thumbnail
+    res = {r.id: r for r in rg.rg04_rg05_links(Http(Budget(50)), item, CFG_RG)}
+    assert res["RG04"].status == FAIL
+    assert res["RG04"].problems[0].startswith(f"thumbnail: 200 but {ctype!r} that can't be decoded"), res["RG04"].problems
+
+
+def test_the_thumbnail_media_type_is_case_insensitive(server, tmp_path):
+    state, base = server
+    item = item_for(base, build(tmp_path / "s.zarr"), now_iso(5))
+    state.thumbnail = "uppercase"
+    res = {r.id: r for r in rg.rg04_rg05_links(Http(Budget(50)), item, CFG_RG)}
+    assert res["RG04"].status == PASS, res["RG04"].evidence
+
+
 def test_link_query_reaches_the_server(server, tmp_path):
     state, base = server
     store = build(tmp_path / "s.zarr")

@@ -28,7 +28,7 @@ class State:
         self.bounds = [-36.0, 34.0, -34.0, 36.0]
         self.force_status: int | None = None  # answer everything with this (503, 302)
         self.flipped_status = 422  # what /rstaging/ answers for links in 0.11 syntax
-        self.thumbnail = "png"  # png | webp (the Explorer's) | html (not an image)
+        self.thumbnail = "png"  # png | webp (the Explorer's) | html (not an image) | svg | corrupt | truncated | uppercase
         self.item: dict | None = None
         self.requests: list[str] = []
 
@@ -94,10 +94,13 @@ def serve(state: State):
                     return self.send(state.tilejson_status, b"Internal Server Error", "text/plain")
                 tj = {"minzoom": state.zooms[0], "maxzoom": state.zooms[1], "bounds": state.bounds, "tiles": []}
                 return self.send(200, json.dumps(tj).encode(), "application/json")
-            if u.path.endswith("preview.png") and state.thumbnail == "webp":
-                return self.send(200, _png(n, state.tile, "WEBP"), "image/webp")
-            if u.path.endswith("preview.png") and state.thumbnail == "html":
-                return self.send(200, b"<html></html>", "text/html; charset=utf-8")
+            if u.path.endswith("preview.png") and state.thumbnail != "png":
+                webp = _png(n, state.tile, "WEBP")
+                body, ctype = {"webp": (webp, "image/webp"), "uppercase": (webp, "Image/WebP"), "truncated": (webp[:200], "image/webp"),
+                               "corrupt": (b"<html>upstream error</html>", "image/webp"),
+                               "html": (b"<html></html>", "text/html; charset=utf-8"),
+                               "svg": (b'<svg xmlns="http://www.w3.org/2000/svg"/>', "image/svg+xml")}[state.thumbnail]
+                return self.send(200, body, ctype)
             if u.path.endswith(".png"):
                 return self.send(200, _png(n, state.tile), "image/png")
             if u.path.endswith("/info"):
