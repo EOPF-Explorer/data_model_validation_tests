@@ -28,11 +28,12 @@ class State:
         self.bounds = [-36.0, 34.0, -34.0, 36.0]
         self.force_status: int | None = None  # answer everything with this (503, 302)
         self.flipped_status = 422  # what /rstaging/ answers for links in 0.11 syntax
+        self.thumbnail = "png"  # png | webp (the Explorer's) | html (not an image)
         self.item: dict | None = None
         self.requests: list[str] = []
 
 
-def _png(n_bands: int, mode: str) -> bytes:
+def _png(n_bands: int, mode: str, fmt: str = "PNG") -> bytes:
     rng = np.random.default_rng(1)
     h = w = 256
     alpha = np.full((h, w), 0 if mode == "empty" else 255, np.uint8)
@@ -45,7 +46,7 @@ def _png(n_bands: int, mode: str) -> bytes:
     else:
         img = Image.fromarray(np.dstack([base, alpha]), "LA")
     buf = io.BytesIO()
-    img.save(buf, "PNG")
+    img.save(buf, fmt)
     return buf.getvalue()
 
 
@@ -93,6 +94,10 @@ def serve(state: State):
                     return self.send(state.tilejson_status, b"Internal Server Error", "text/plain")
                 tj = {"minzoom": state.zooms[0], "maxzoom": state.zooms[1], "bounds": state.bounds, "tiles": []}
                 return self.send(200, json.dumps(tj).encode(), "application/json")
+            if u.path.endswith("preview.png") and state.thumbnail == "webp":
+                return self.send(200, _png(n, state.tile, "WEBP"), "image/webp")
+            if u.path.endswith("preview.png") and state.thumbnail == "html":
+                return self.send(200, b"<html></html>", "text/html; charset=utf-8")
             if u.path.endswith(".png"):
                 return self.send(200, _png(n, state.tile), "image/png")
             if u.path.endswith("/info"):

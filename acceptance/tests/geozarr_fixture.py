@@ -21,7 +21,7 @@ def decl(uuid: str, stale: bool = False) -> dict:
 def build(
     path,
     *,
-    consolidated: str = "all",  # all | none | root-only
+    consolidated: str = "all",  # all | none | root-only | no-levels
     layout_shape: bool = True,  # spatial:shape in the layout entries
     layout_transform: bool = True,  # spatial:transform in the layout entries
     group_shape: bool = True,  # spatial:shape on the level groups
@@ -99,6 +99,9 @@ def build(
         zarr.consolidate_metadata(str(path), path="measurements")
         zarr.consolidate_metadata(str(path))
     elif consolidated == "root-only":
+        zarr.consolidate_metadata(str(path))
+    elif consolidated == "no-levels":  # EODC's layout: the multiscales group and the root, not each level
+        zarr.consolidate_metadata(str(path), path="measurements")
         zarr.consolidate_metadata(str(path))
     return str(path)
 

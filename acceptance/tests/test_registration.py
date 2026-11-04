@@ -58,6 +58,19 @@ def test_links_render_and_flip_readiness_is_reported(server, tmp_path):
     assert res["RG05"].status == PASS
 
 
+def test_a_webp_thumbnail_passes_and_a_non_image_fails(server, tmp_path):
+    """Issue #8: any image type is a valid thumbnail (the Explorer's are webp); HTML is not."""
+    state, base = server
+    item = item_for(base, build(tmp_path / "s.zarr"), now_iso(5))
+    state.thumbnail = "webp"
+    res = {r.id: r for r in rg.rg04_rg05_links(Http(Budget(50)), item, CFG_RG)}
+    assert res["RG04"].status == PASS, res["RG04"].evidence
+    assert any(e.startswith("thumbnail (/raster): 200, ") for e in res["RG04"].evidence), res["RG04"].evidence
+    state.thumbnail = "html"
+    res = {r.id: r for r in rg.rg04_rg05_links(Http(Budget(50)), item, CFG_RG)}
+    assert res["RG04"].status == FAIL and res["RG04"].problems == ["thumbnail: 200 but 'text/html; charset=utf-8', not an image"]
+
+
 def test_link_query_reaches_the_server(server, tmp_path):
     state, base = server
     store = build(tmp_path / "s.zarr")

@@ -91,7 +91,7 @@ Numbers are IDs, not an order; gaps are unused IDs.
 
 | id | checks | catches |
 |---|---|---|
-| ST01 | consolidated metadata on the root (or each sub-root, `consolidation = "subroot"`, data-model#291 Ex.2), the opened, multiscales and `consolidated_groups`; levels listed | unconsolidated groups → 0.12 500 (data-pipeline#446); the validator blind spot |
+| ST01 | consolidated metadata on the root (or each sub-root, `consolidation = "subroot"`, data-model#291 Ex.2), the opened, multiscales and `consolidated_groups`; levels listed. A level group without its own consolidated metadata is listed, not warned (data-model#335, issue #8) | unconsolidated groups → 0.12 500 (data-pipeline#446); the validator blind spot |
 | ST03 | what titiler 0.12 reads without fallback: conventions, bbox, CRS, `spatial:dimensions`, shape+transform for min/max zoom, a transform per level; coarsening order | OLCI tilejson 500 (data-model#303); level tiles 500 |
 | ST04 | opened groups visible to titiler-eopf (`_get_groups` rule); no undeclared `spatial:`/`proj:` keys | invisible groups (`scl`) |
 | ST11 | `zarr_conventions` declarations equal the v0.1 schema consts (WARN, or FAIL with `strict_declarations`) | stale names/URLs (inspect.geozarr.org) |
@@ -102,9 +102,9 @@ Numbers are IDs, not an order; gaps are unused IDs.
 | HT02 | each opened group, rooted where titiler roots it, opens with listing forbidden | PROPFIND 405 over HTTP |
 | TR01 | titiler-eopf 0.12's own `GeoZarrReader`: open, zooms, tiles (scratch only) | anything the server would 500 on |
 | TI00–TI09 | per endpoint: version + route fingerprint, /info, tilejson without zoom params, decoded tiles scaled by footprint coverage, RGB channels, cold cache, viewer, URL-form contract, fit-bounds vs minzoom | C1, C8, C13, C14 |
-| RG04/05/07/08 | the item's links render; do they also work on 0.12 (flip readiness); item newer than its store; asset hrefs point exactly at this store's groups | broken links, the /raster flip, stale registrations |
+| RG04/05/07/08 | the item's links render (xyz as PNG, the thumbnail as any image type, issue #8); do they also work on 0.12 (flip readiness); item newer than its store; asset hrefs point exactly at this store's groups | broken links, the /raster flip, stale registrations |
 | GR02 | `generic_rechunker` layout: each dimension chunked to `min(spatial_chunk, size)`, one shard per array (FAIL); 2-D coordinates left uncompressed, and arrays written like coordinates that nothing declares as one (WARN) | rechunking or sharding that drifts from data-model#292's rule |
-| GR03 | CF packing: CF `scale_factor`/`add_offset` and the `scale_offset` codec never both; `_FillValue` and the valid range fit the dtype (FAIL); zarr `fill_value` ≠ CF `_FillValue` (WARN) | double decoding; nodata that readers mask differently |
+| GR03 | CF packing: CF `scale_factor`/`add_offset` and the `scale_offset` codec never both; `_FillValue` fits the dtype (FAIL); a valid range the dtype can't hold (WARN, named first in the summary, issue #8); zarr `fill_value` ≠ CF `_FillValue` (WARN) | double decoding; nodata that readers mask differently |
 
 Per-collection settings live in `configs/*.toml`; all but OLCI are drafts. For products whose
 sub-root name differs per product (S1), `subroot_asset` names the asset of the root's own
