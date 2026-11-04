@@ -29,11 +29,12 @@ class State:
         self.bounds = [-36.0, 34.0, -34.0, 36.0]
         self.force_status: int | None = None  # answer everything with this (503, 302)
         self.flipped_status = 422  # what /rstaging/ answers for links in 0.11 syntax
+        self.thumbnail = "png"  # png | webp (the Explorer's) | html (not an image) | svg | corrupt | truncated | uppercase
         self.item: dict | None = None
         self.requests: list[str] = []
 
 
-def _png(n_bands: int, mode: str) -> bytes:
+def _png(n_bands: int, mode: str, fmt: str = "PNG") -> bytes:
     rng = np.random.default_rng(1)
     h = w = 256
     alpha = np.full((h, w), 0 if mode == "empty" else 255, np.uint8)
@@ -46,7 +47,7 @@ def _png(n_bands: int, mode: str) -> bytes:
     else:
         img = Image.fromarray(np.dstack([base, alpha]), "LA")
     buf = io.BytesIO()
-    img.save(buf, "PNG")
+    img.save(buf, fmt)
     return buf.getvalue()
 
 
@@ -94,6 +95,13 @@ def serve(state: State):
                     return self.send(state.tilejson_status, b"Internal Server Error", "text/plain")
                 tj = {"minzoom": state.zooms[0], "maxzoom": state.zooms[1], "bounds": state.bounds, "tiles": []}
                 return self.send(200, json.dumps(tj).encode(), "application/json")
+            if u.path.endswith("preview.png") and state.thumbnail != "png":
+                webp = _png(n, state.tile, "WEBP")
+                body, ctype = {"webp": (webp, "image/webp"), "uppercase": (webp, "Image/WebP"), "truncated": (webp[:200], "image/webp"),
+                               "corrupt": (b"<html>upstream error</html>", "image/webp"),
+                               "html": (b"<html></html>", "text/html; charset=utf-8"),
+                               "svg": (b'<svg xmlns="http://www.w3.org/2000/svg"/>', "image/svg+xml")}[state.thumbnail]
+                return self.send(200, body, ctype)
             if u.path.endswith(".png"):
                 zxy = tuple(int(p) for p in u.path.removesuffix(".png").split("/")[-3:]) if "/tiles/" in u.path else None
                 return self.send(200, _png(n, "flat" if zxy in state.flat_tiles else state.tile), "image/png")

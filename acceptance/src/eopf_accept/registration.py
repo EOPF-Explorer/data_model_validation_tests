@@ -183,9 +183,16 @@ def _check_link(http: Http, rel: str, href: str, ztile, expected=None, footprint
     if r.status_code != 200:
         return r.status_code, f"HTTP {r.status_code}"
     if rel in ("xyz", "thumbnail"):
-        if "png" not in r.headers.get("content-type", ""):
-            return 0, f"200 but {r.headers.get('content-type')!r}, not a PNG"
-        st = png_stats(r.content)
+        ctype = r.headers.get("content-type", "").lower()
+        # The xyz link asks for .png; a thumbnail may be any image type (issue #8: the Explorer's are webp).
+        if rel == "xyz" and "png" not in ctype:
+            return 0, f"200 but {ctype!r}, not a PNG"
+        if rel == "thumbnail" and not ctype.startswith("image/"):
+            return 0, f"200 but {ctype!r}, not an image"
+        try:
+            st = png_stats(r.content)
+        except (OSError, SyntaxError) as exc:  # uncaught, this would stop the run and lose the titiler battery
+            return 0, f"200 but {ctype!r} that can't be decoded ({type(exc).__name__})"
         if st["valid"] == 0:
             return 0, "200 but no valid pixels"
         return 200, f"200, {st['valid']:.0%} valid"
