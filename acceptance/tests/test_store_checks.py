@@ -42,6 +42,14 @@ def test_c2_root_only_consolidation_still_fails_the_opened_group(tmp_path):
     assert res["HT02"].status == FAIL
 
 
+def test_level_groups_without_their_own_consolidated_metadata_pass_and_are_listed(tmp_path):
+    """Issue #8 / data-model#335: a level group needs no consolidated metadata of its own."""
+    res = run(build(tmp_path / "s.zarr", consolidated="no-levels"))
+    assert res["ST01"].status == PASS, res["ST01"].evidence
+    assert any("level group(s) without their own consolidated metadata, which data-model#335 allows" in e
+               for e in res["ST01"].evidence), res["ST01"].evidence
+
+
 def test_c1_no_spatial_shape_anywhere_fails_st03(tmp_path):
     """The 6 Oct OLCI tilejson 500: neither the layout nor the level groups had spatial:shape."""
     res = run(build(tmp_path / "s.zarr", layout_shape=False, group_shape=False))

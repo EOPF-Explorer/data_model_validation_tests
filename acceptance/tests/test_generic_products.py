@@ -140,7 +140,8 @@ def test_gr02_flags_an_undeclared_coordinate_and_large_uncompressed_coordinates(
 @pytest.mark.parametrize("attrs, codecs, status, text", [
     ({"scale_factor": 0.01, "_FillValue": 65535}, [{"name": "scale_offset"}], FAIL, "decoded twice"),
     ({"_FillValue": 70000}, [], FAIL, "_FillValue 70000 does not fit uint16"),
-    ({"valid_range": [0, 70000]}, [], FAIL, "valid_range [0, 70000] does not fit uint16"),
+    ({"valid_range": [0, 70000]}, [], WARN, "valid_range [0, 70000] does not fit uint16"),  # issue #8: a WARN
+    ({"valid_max": 70000}, [], WARN, "1 valid range(s) the dtype can't hold"),
     ({"scale_factor": 0.01, "_FillValue": 65535}, [], WARN, "zarr fill_value 0 != CF _FillValue 65535"),
     ({"scale_factor": 0.01, "_FillValue": 0}, [], PASS, "consistent"),
 ])
@@ -149,6 +150,24 @@ def test_gr03_cf_packing(attrs, codecs, status, text):
                              "codecs": [{"name": "bytes"}, *codecs, {"name": "zstd"}], "attributes": attrs}})
     res = gr03_encoding(ctx)
     assert res.status == status and text in res.summary + " ".join(res.evidence), (res.summary, res.evidence)
+
+
+def test_gr03_names_valid_ranges_first_and_keeps_them_out_of_a_fail():
+    """SCL as EODC writes it (uint8, valid_max 65535) next to a fill mismatch: a WARN that says both;
+    a double encoding elsewhere still FAILs, and its problems don't include the range."""
+    scl = {"shape": [40, 50], "chunks": [16, 16], "data_type": "uint8", "fill_value": 0,
+           "codecs": [{"name": "bytes"}], "attributes": {"_FillValue": 0, "valid_min": 1, "valid_max": 65535}}
+    cld = {"shape": [40, 50], "chunks": [16, 16], "data_type": "uint8", "fill_value": 0,
+           "codecs": [{"name": "bytes"}], "attributes": {"_FillValue": 255}}
+    res = gr03_encoding(fake_ctx({"scl": dict(scl), "cld": dict(cld)}))
+    assert res.status == WARN
+    assert res.summary == ("1 valid range(s) the dtype can't hold; "
+                           "1 array(s) whose zarr fill_value or packing disagrees with CF"), res.summary
+    assert res.evidence[0] == "scl: valid_max 65535 does not fit uint8"
+    twice = {"shape": [40, 50], "chunks": [16, 16], "data_type": "uint16", "fill_value": 0,
+             "codecs": [{"name": "bytes"}, {"name": "scale_offset"}], "attributes": {"scale_factor": 0.01}}
+    res = gr03_encoding(fake_ctx({"scl": dict(scl), "twice": twice}))
+    assert res.status == FAIL and res.problems == ["twice: CF scale_factor/add_offset AND the scale_offset codec: decoded twice"]
 
 
 def test_gr03_nan_fills_agree():

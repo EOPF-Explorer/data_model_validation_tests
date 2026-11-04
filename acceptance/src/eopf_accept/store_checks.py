@@ -173,8 +173,9 @@ class StoreContext:
 
 def st01_consolidated(ctx: StoreContext) -> Result:
     """data-model#291: every root (Ex.1) or sub-root (Ex.2, `consolidation = "subroot"`) is
-    consolidated, and so is every group a STAC asset points to; plus what titiler opens."""
-    fails, warns = [], []
+    consolidated, and so is every group a STAC asset points to; plus what titiler opens. A level
+    group needs no consolidated metadata of its own (data-model#335, issue #8): listed, not warned."""
+    fails, bare_levels = [], []
     at_subroot = ctx.cfg.get("consolidation") == "subroot"
     if ctx.subroot_problem:
         fails.append(ctx.subroot_problem)
@@ -199,16 +200,16 @@ def st01_consolidated(ctx: StoreContext) -> Result:
             if node is None:
                 fails.append(f"{path}: layout names it but it has no zarr.json")
             elif _consolidated(node) is None:
-                warns.append(f"{path}: no consolidated_metadata (level group)")
+                bare_levels.append(path)
             if cm is not None and asset not in cm:
                 fails.append(f"{g}: consolidated metadata does not list level {asset!r}")
     rows = [f"optional group(s) absent: {ctx.absent_optional}"] if ctx.absent_optional else []
     if at_subroot:
         rows.append(f"sub-root {ctx.subroot or '?'} checked instead of the root (data-model#291 Ex.2)")
+    if bare_levels:
+        rows.append(f"{len(bare_levels)} level group(s) without their own consolidated metadata, which data-model#335 allows: {bare_levels}")
     if fails:
-        return Result("ST01", "store", FAIL, f"{len(fails)} group(s) missing, not consolidated or incomplete", fails + warns + rows, problems=fails)
-    if warns:
-        return Result("ST01", "store", WARN, f"{len(warns)} level group(s) without their own consolidated metadata", warns + rows)
+        return Result("ST01", "store", FAIL, f"{len(fails)} group(s) missing, not consolidated or incomplete", fails + rows, problems=fails)
     return Result("ST01", "store", PASS, f"{'sub-root' if at_subroot else 'root'}, opened, multiscales and listed groups are consolidated", rows)
 
 
@@ -683,14 +684,16 @@ def _same_fill(cf, zarr_fill) -> bool:
 def gr03_encoding(ctx: StoreContext) -> Result:
     """CF packing as create_uniform_encoding writes it: a packed variable keeps its integer dtype
     with CF scale_factor/add_offset/_FillValue, or is packed by the scale_offset codec with no CF
-    scale attributes, never both (that decodes twice). _FillValue and the valid range must fit the
-    dtype. A zarr fill_value that differs from the CF _FillValue is reported: missing chunks read
-    as the zarr fill_value, and readers that take it as nodata mask a different value."""
+    scale attributes, never both (that decodes twice). _FillValue must fit the dtype. A valid range
+    that doesn't fit is a WARN (issue #8: it hides no data, and every S2 L2A store so far has one on
+    SCL), named first in the summary. A zarr fill_value that differs from the CF _FillValue is
+    reported: missing chunks read as the zarr fill_value, and readers that take it as nodata mask a
+    different value."""
     got = _generic_arrays(ctx, "GR03")
     if isinstance(got, Result):
         return got
     _, root, cm = got
-    fails, warns, n = [], [], 0
+    fails, ranges, warns, n = [], [], [], 0
     for path, m in sorted(cm.items()):
         if m.get("node_type") != "array" or not isinstance(m.get("data_type"), str):
             continue
@@ -706,24 +709,28 @@ def gr03_encoding(ctx: StoreContext) -> Result:
             fails.append(f"{label}: CF scale_factor/add_offset AND the scale_offset codec: decoded twice")
         if cf_scale and dtype.kind == "f":
             warns.append(f"{label}: CF scale attributes on a {dtype} array (packed variables keep their integer dtype)")
-        for key in ("_FillValue", "valid_min", "valid_max"):
+        if "_FillValue" in a and not _fits(a["_FillValue"], dtype):
+            fails.append(f"{label}: _FillValue {a['_FillValue']!r} does not fit {dtype}")
+        for key in ("valid_min", "valid_max"):
             if key in a and not _fits(a[key], dtype):
-                fails.append(f"{label}: {key} {a[key]!r} does not fit {dtype}")
+                ranges.append(f"{label}: {key} {a[key]!r} does not fit {dtype}")
         if "valid_range" in a:
             vr = a["valid_range"]
             if not (isinstance(vr, list) and len(vr) == 2):
                 fails.append(f"{label}: valid_range {vr!r} is not a [min, max] pair")
             elif not all(_fits(v, dtype) for v in vr):
-                fails.append(f"{label}: valid_range {vr!r} does not fit {dtype}")
+                ranges.append(f"{label}: valid_range {vr!r} does not fit {dtype}")
         if "_FillValue" in a and not _same_fill(a["_FillValue"], m.get("fill_value")):
             warns.append(f"{label}: zarr fill_value {m.get('fill_value')!r} != CF _FillValue {a['_FillValue']!r}")
     if not n:
         return Result("GR03", "store", SKIP, f"{root or '/'}: no array to check")
-    status = FAIL if fails else WARN if warns else PASS
+    status = FAIL if fails else WARN if ranges or warns else PASS
+    counts = ([f"{len(ranges)} valid range(s) the dtype can't hold"] if ranges else []) + (
+        [f"{len(warns)} array(s) whose zarr fill_value or packing disagrees with CF"] if warns else [])
     summary = (fails[0] + (f" (+{len(fails) - 1} more)" if len(fails) > 1 else "") if fails else
-               f"{len(warns)} array(s) whose zarr fill_value or packing disagrees with CF" if warns else
+               "; ".join(counts) if counts else
                f"{n} arrays: CF packing and fill values consistent")
-    shown = fails + warns
+    shown = fails + ranges + warns
     return Result("GR03", "store", status, summary, shown[:40] + ([f"... {len(shown) - 40} more"] if len(shown) > 40 else []),
                   problems=fails)
 
