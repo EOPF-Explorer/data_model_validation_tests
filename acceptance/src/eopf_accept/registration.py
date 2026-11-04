@@ -126,6 +126,8 @@ def rg07_fresh(item: dict, reader: StoreReader, http: Http) -> Result:
     item_t = _parse_time(props.get("updated") or props.get("created"))
     meta = reader.head("zarr.json")
     store_t = meta.get("last_modified") if meta else None
+    if store_t and store_t.timestamp() == 0:  # no Last-Modified header: obstore reports the epoch
+        store_t = None
     if not item_t or not store_t:
         return Result("RG07", "registration", SKIP, f"no item updated/created ({item_t}) or store Last-Modified ({store_t})")
     lag = (item_t - store_t).total_seconds()
