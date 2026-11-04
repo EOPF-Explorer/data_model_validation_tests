@@ -23,6 +23,7 @@ from .model import FAIL, PASS, SKIP, VOID, WARN, XFAIL, XPASS, Result
 TMS = "WebMercatorQuad"
 ASSET_ROUTE = "/collections/{collection_id}/items/{item_id}/assets/{asset_id}"
 MAX_TILES = 8  # TI03 renders one tile per pyramid level, at most this many
+MAX_TILES_ELSEWHERE = 2  # and at most this many more for each level whose tile is flat
 
 
 def resolve_group(path: str, oracle: dict) -> tuple[str | None, str | None]:
@@ -37,17 +38,20 @@ def resolve_group(path: str, oracle: dict) -> tuple[str | None, str | None]:
 
 
 def expected_zooms(cfg: dict, api: str, oracle: dict | None):
-    """What the store says this endpoint's render should advertise: (range, group, level,
-    the level's zoom, every level's zoom), or the reason it can't say (a str)."""
+    """What this endpoint's render should advertise, per the store (render_levels), or the reason
+    it can't say. The 0.12 item route's tilejson doesn't come from the store."""
+    if oracle is not None and api != "0.11" and (cfg["render"].get(api) or {}).get("route") != "asset":
+        return "the 0.12 STAC item route takes its zooms from rio-tiler's STAC reader, not from the store"
+    return render_levels(cfg, api, oracle)
+
+
+def render_levels(cfg: dict, api: str, oracle: dict | None):
+    """What the store says about the group this endpoint renders: (range, group, level, the
+    level's zoom, every level's zoom), or the reason it can't say (a str)."""
     if oracle is None:
         return "no store metadata read"
     spec = cfg["render"].get(api) or {}
-    if api == "0.11":
-        path = spec.get("group", "")
-    elif spec.get("route") == "asset":
-        path = (cfg.get("asset_group") or {}).get(spec.get("asset"), "")
-    else:
-        return "the 0.12 STAC item route takes its zooms from rio-tiler's STAC reader, not from the store"
+    path = spec.get("group", "") if api == "0.11" else (cfg.get("asset_group") or {}).get(spec.get("asset"), "")
     g, level = resolve_group(path, oracle)
     if g is None:
         return f"render group {path!r} is not a configured multiscales group or one of its levels"
@@ -137,6 +141,7 @@ class TitilerBattery:
         self.center = center
         self.footprint = footprint  # STAC item geometry, when the item was fetched
         self.expected = expected_zooms(cfg, self.api, zoom_oracle)  # zooms.oracle(StoreContext)
+        self.levels = render_levels(cfg, self.api, zoom_oracle)
         # which viewer the items link: 0.11 /viewer (OLCI) or map.html (S1); 0.12 map.html
         self.viewer_page = (cfg.get("viewer_page") or {}).get(self.api, "viewer" if self.api == "0.11" else "map.html")
         self.cache_headers: list[str] = []
@@ -244,11 +249,23 @@ class TitilerBattery:
             return item_center
         return list(geo.interior_point(self._footprint()))
 
+    def _varied_tile_elsewhere(self, prefix: str, params: list, z: int, tile: tuple[int, int], min_distinct: int) -> str | None:
+        """A flat tile is a patch if another part of the footprint varies at this zoom (a cloud
+        clips to white under the stretch); a constant render is flat everywhere."""
+        others = dict.fromkeys(lonlat_to_tile(lon, lat, z) for lon, lat in geo.spread_points(self._footprint()))
+        for x, y in [t for t in others if t != tile][:MAX_TILES_ELSEWHERE]:
+            r = self.get(f"{prefix}/tiles/{TMS}/{z}/{x}/{y}.png", params)
+            if r.status_code == 200 and "png" in r.headers.get("content-type", ""):
+                distinct = png_stats(r.content)["distinct"]
+                if distinct >= min_distinct:
+                    return f"{x}/{y} has {distinct} distinct values"
+        return None
+
     def ti03_tiles(self) -> Result:
         """One tile per pyramid level (each level's zoom from the store), so every resolution
         is read; without the store, minzoom, middle and maxzoom of the tilejson. A render that
         reads one level group (the 0.11 r0 links) reads that level at every zoom, and the
-        summary says so."""
+        summary says so. A flat tile only fails if the rest of the footprint is flat too."""
         if not self.tilejson:
             return self.result("TI03", SKIP, "no usable tilejson (TI02)")
         lo, hi = self.tilejson["minzoom"], self.tilejson["maxzoom"]
@@ -257,8 +274,8 @@ class TitilerBattery:
         min_distinct = int(self.cfg.get("min_distinct", 16))
         prefix, params = self._prefix(1)
         fails, rows, metrics = [], [], {}
-        per_level = not isinstance(self.expected, str)
-        zooms = self.expected[4] if per_level else sorted({lo, (lo + hi) // 2, hi})
+        per_level = not isinstance(self.levels, str)
+        zooms = self.levels[4] if per_level else sorted({lo, (lo + hi) // 2, hi})
         if len(zooms) > MAX_TILES:
             rows.append(f"{len(zooms)} levels; rendering {MAX_TILES} of them, spread from the coarsest to the finest")
             zooms = sorted({zooms[round(i * (len(zooms) - 1) / (MAX_TILES - 1))] for i in range(MAX_TILES)})
@@ -279,8 +296,12 @@ class TitilerBattery:
             if st["valid"] <= want:
                 fails.append(f"z{z} {x}/{y}: {st['valid']:.0%} valid pixels (want > {want:.0%})")
             elif st["distinct"] < min_distinct:
-                fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values (a constant render?)")
-        level = self.expected[2] if per_level else None
+                elsewhere = self._varied_tile_elsewhere(prefix, params, z, (x, y), min_distinct)
+                if elsewhere:
+                    rows.append(f"z{z} {x}/{y}: a flat patch ({st['distinct']} distinct values), not a constant render: z{z} {elsewhere}")
+                else:
+                    fails.append(f"z{z} {x}/{y}: only {st['distinct']} distinct values, and no other part of the footprint varies (a constant render?)")
+        level = self.levels[2] if per_level else None
         which = (f"each pyramid level's zoom, all read from level group {level}" if level else
                  "one per pyramid level" if per_level else "tilejson min, mid, max")
         return self.result("TI03", FAIL if fails else PASS, fails[0] if fails else f"tiles at z{', z'.join(map(str, zooms))} ({which}) decode with real pixels",
@@ -372,5 +393,5 @@ class TitilerBattery:
 
     @staticmethod
     def request_bound(cfg: dict, api: str) -> int:
-        # TI00 TI01 TI02 TI04 TI06 one each, TI03 up to MAX_TILES, TI07 one per contract row, 2 slack
-        return 7 + MAX_TILES + len([c for c in cfg.get("contract", []) if c["api"] == api])
+        # TI00 TI01 TI02 TI04 TI06 one each, TI03 up to MAX_TILES with their retries, TI07 one per contract row, 2 slack
+        return 7 + MAX_TILES * (1 + MAX_TILES_ELSEWHERE) + len([c for c in cfg.get("contract", []) if c["api"] == api])

@@ -5,10 +5,11 @@ import tomllib
 
 import pytest
 
+from eopf_accept import geometry as geo
 from eopf_accept.budget import Budget, Http
 from eopf_accept.cli import CONFIG_DIR
 from eopf_accept.model import FAIL, KNOWN, PASS, VOID, WARN, XFAIL, XPASS, Result, apply_known_issues
-from eopf_accept.titiler_checks import TitilerBattery, extent_px, urls
+from eopf_accept.titiler_checks import TitilerBattery, extent_px, lonlat_to_tile, urls
 
 from .fake_titiler import VERSIONS, State, serve
 from .geozarr_fixture import CFG
@@ -157,6 +158,41 @@ def test_issue1_unchecked_zooms_warn_instead_of_passing(server):
     cfg = {**CFG, "render": {**CFG["render"], "0.12": {"route": "item", "asset": "radianceData"}}}
     r = by_id(battery(base, cfg=cfg).run())["TI02"]
     assert r.status == WARN and any("rio-tiler's STAC reader" in e for e in r.evidence), r.evidence
+
+
+def test_ti03_reads_the_stores_levels_on_the_item_route(server):
+    """The item route's tilejson says 0–24; z0 and z24 say nothing about the store (T33WWP, 3 Nov)."""
+    state, base = server
+    state.zooms = (0, 24)
+    cfg = {**CFG, "render": {**CFG["render"], "0.12": {"route": "item", "asset": "radianceData"}}}
+    b = battery(base, cfg=cfg)
+    assert b.ti02_tilejson().status == WARN  # TI02 still doesn't judge the item route's range
+    state.requests.clear()
+    r = b.ti03_tiles()
+    assert {int(p.split("/tiles/")[1].split("/")[1]) for p in state.requests} == {5, 6, 7, 8, 9}
+    assert r.status == PASS and "one per pyramid level" in r.summary, r.summary
+
+
+FOOTPRINT = geo.bbox_polygon([-36.0, 34.0, -34.0, 36.0])
+
+
+def test_ti03_a_flat_patch_is_not_a_constant_render(server):
+    """T33WWP's centre is saturated cloud at z13 and z12 (1 and 15 distinct values); the rest has over 150."""
+    state, base = server
+    x, y = lonlat_to_tile(*geo.interior_point(FOOTPRINT), 9)
+    state.flat_tiles = {(9, x, y)}
+    r = by_id(battery(base, footprint=FOOTPRINT).run())["TI03"]
+    assert r.status == PASS, r.evidence
+    assert any(e.startswith(f"z9 {x}/{y}: a flat patch") for e in r.evidence), r.evidence
+
+
+def test_ti03_a_render_flat_everywhere_fails(server):
+    state, base = server
+    state.tile = "flat"
+    r = by_id(battery(base, footprint=FOOTPRINT).run())["TI03"]
+    assert r.status == FAIL and "no other part of the footprint varies (a constant render?)" in r.summary, r.summary
+    # z9 has other tiles to try; at z5 the whole footprint is one tile, so it can't tell the two apart
+    assert any(p.startswith("z9 ") for p in r.problems), r.problems
 
 
 def test_item_render_extra_reaches_every_render(server):

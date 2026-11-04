@@ -54,6 +54,14 @@ def interior_point(geometry: dict) -> tuple[float, float]:
     return best[1], best[2]
 
 
+def spread_points(geometry: dict) -> list[tuple[float, float]]:
+    """Up to four points inside the largest ring, spread over its bbox, the two farthest apart first."""
+    ring = max(_rings(geometry), key=lambda r: abs(_area(r)))
+    xs, ys = [p[0] for p in ring], [p[1] for p in ring]
+    points = [(min(xs) + (max(xs) - min(xs)) * i / 4, min(ys) + (max(ys) - min(ys)) * j / 4) for i, j in ((1, 1), (3, 3), (1, 3), (3, 1))]
+    return [p for p in points if contains(geometry, *p)]
+
+
 def _area(ring) -> float:
     return sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(ring, ring[1:])) / 2
 
