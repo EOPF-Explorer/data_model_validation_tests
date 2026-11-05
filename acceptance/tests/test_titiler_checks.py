@@ -13,7 +13,7 @@ from PIL import Image
 from eopf_accept import cli, geometry as geo
 from eopf_accept.budget import Budget, Http
 from eopf_accept.cli import CONFIG_DIR
-from eopf_accept.model import FAIL, KNOWN, PASS, VOID, WARN, XFAIL, XPASS, Result, apply_known_issues
+from eopf_accept.model import FAIL, KNOWN, PASS, VOID, WARN, XFAIL, XPASS, apply_known_issues
 from eopf_accept.titiler_checks import TitilerBattery, decoded_stats, extent_px, lonlat_to_tile, png_stats, urls
 
 from .fake_titiler import VERSIONS, State, serve
@@ -113,12 +113,11 @@ def test_issue1_r0_collapse_fails_with_its_mechanism_without_any_item_config(ser
     assert "all read from level group measurements/r0" in res["TI03"].summary, res["TI03"].summary
 
 
-def test_r0_collapse_is_one_problem_and_the_olci_known_issue_matches_it_on_raster_only(server):
-    """7 Oct, option (b): the r0 collapse stays on /raster until the titiler-eopf >0.12 flip.
-    With an item anchor equal to the store's range (canary 5–9, S3A 4–7), the anchor
+def test_r0_collapse_is_one_problem_and_no_config_excuses_it(server):
+    """With an item anchor equal to the store's range (canary 5–9, S3A 4–7), the anchor
     comparison repeated the store comparison, so a known issue could never match every
-    problem. The real OLCI config's entry must turn exactly this into KNOWN, on /raster only,
-    and only until its date."""
+    problem. The titiler-eopf >0.12 flip replaced the 0.11 r0 links, so the OLCI config's
+    known issue is gone: this collapse, on a 0.11 endpoint, is a FAIL again."""
     state, base = server
     state.api, state.zooms = "0.11", (9, 9)
     cfg = {**CFG, "items": {ITEM: {"zooms": [5, 9]}}}
@@ -126,14 +125,8 @@ def test_r0_collapse_is_one_problem_and_the_olci_known_issue_matches_it_on_raste
     assert raster.status == FAIL and len(raster.problems) == 1, raster.problems
     assert "the render reads level group measurements/r0" in raster.problems[0]
     olci = tomllib.loads((CONFIG_DIR / "sentinel-3-olci-l1-efr.toml").read_text())
-    known = [k for k in olci["known_issues"] if k["check"] == "TI02"]
-    assert [k["group"] for k in known] == ["titiler:raster"]
-    until = dt.date.fromisoformat(str(known[0]["until"]))
-    elsewhere = Result("TI02", "titiler:rstaging", FAIL, raster.summary, problems=list(raster.problems))
-    expired = Result("TI02", "titiler:raster", FAIL, raster.summary, problems=list(raster.problems))
-    apply_known_issues([raster, elsewhere], known, until)
-    apply_known_issues([expired], known, until + dt.timedelta(days=1))
-    assert (raster.status, elsewhere.status, expired.status) == (KNOWN, FAIL, FAIL)
+    apply_known_issues([raster], olci["known_issues"], dt.date(2026, 11, 9))
+    assert raster.status == FAIL, raster.status
 
 
 def test_issue1_other_mismatches_get_the_generic_text(server):
@@ -250,7 +243,7 @@ def test_l2a_threshold_lets_dark_water_clear_a_flat_tile_but_not_a_flat_render(s
     assert by_id(battery(base, cfg=cfg, footprint=FOOTPRINT).run())["TI03"].status == FAIL
 
 
-EXPLORER = {"name": "the Explorer's true colour", "rescale": "0,0.5", "min_distinct": 10, "api": "0.12"}
+EXPLORER = {"name": "the Explorer's true colour", "rescale": "0,0.5", "min_distinct": 10, "endpoint": "fake"}
 SECOND = {**CFG, "render": {**CFG["render"], "second_stretch": EXPLORER}}
 
 
@@ -309,13 +302,14 @@ def test_ti10_skips_when_no_level_has_valid_pixels(server):
     assert b.ti10_second_stretch().status == "SKIP"
 
 
-def test_ti10_runs_on_its_configured_api_only(server):
-    """Whether this data clips at this stretch doesn't depend on the titiler version."""
+def test_ti10_runs_on_its_named_endpoint_only(server):
+    """Whether this data clips at this stretch doesn't depend on the endpoint, so a second endpoint
+    on the same API doesn't render it again, and the bound counts it once."""
     state, base = server
-    state.api = "0.11"
-    res = by_id(battery(base, ep=RASTER, cfg=SECOND, footprint=FOOTPRINT).run())
+    other = TitilerBattery(Http(Budget(100)), "other", {"base": base, **RSTAGING}, SECOND, ITEM, footprint=FOOTPRINT, zoom_oracle=ORACLE)
+    res = by_id(other.run())
     assert "TI03" in res and "TI10" not in res, sorted(res)
-    assert TitilerBattery.request_bound(SECOND, "0.12") - TitilerBattery.request_bound(SECOND, "0.11") == 8 * 2
+    assert TitilerBattery.request_bound(SECOND, "0.12", "fake") - TitilerBattery.request_bound(SECOND, "0.12", "other") == 8 * 2
 
 
 def test_ti10_sends_its_stretch_even_if_the_render_has_none(server):
@@ -363,20 +357,20 @@ def test_every_flat_level_stays_within_the_bound_with_a_second_stretch(server):
     state.requests.clear()
     battery(base, cfg=SECOND, footprint=FOOTPRINT, oracle={"measurements": {"levels": levels, "range": (10, 17)}}, budget=500).run()
     assert sum("/tiles/" in p for p in state.requests) == (8 + 1) * 5 + 8 * 2
-    assert len(state.requests) <= TitilerBattery.request_bound(SECOND, "0.12")
+    assert len(state.requests) <= TitilerBattery.request_bound(SECOND, "0.12", "fake")
 
 
 def test_l2a_config_tests_the_links_stretch_and_the_explorers():
     assert L2A["render"]["rescale"] == ["0,1", "0,1", "0,1"] and L2A["min_distinct"] == 5
     assert L2A["render"]["second_stretch"]["rescale"] == "0,0.5" and L2A["render"]["second_stretch"]["min_distinct"] == 10
-    assert L2A["render"]["second_stretch"]["api"] == "0.12"
+    assert L2A["render"]["second_stretch"]["endpoint"] == "raster" and "raster" in L2A["endpoints"]
 
 
 def test_the_registered_l2a_plan_fits_the_default_budget(capsys):
-    """The README's registered form with both endpoints, the largest plan a user runs: registration
-    requests count too, and a plan over budget refuses to start."""
+    """The README's registered form with both configured endpoints, the largest plan a user runs:
+    registration requests count too, and a plan over budget refuses to start."""
     cli.main(["plan", "--collection", "sentinel-2-l2a", "--stage", "registered", "--store", "s3://ci/b/x.zarr", "--item", "demo",
-              "--endpoint", "a=http://127.0.0.1:9@0.12.4:0.12", "--endpoint", "b=http://127.0.0.1:9@0.11.1:0.11"])
+              "--endpoint", "rstaging", "--endpoint", "raster"])
     out = capsys.readouterr().out
     assert "registration" in out and "fits" in out and "REFUSED" not in out, out
 
@@ -484,7 +478,7 @@ def test_request_bound_covers_every_flat_tile_compared_elsewhere(server):
     state.requests.clear()
     battery(base, footprint=FOOTPRINT, oracle={"measurements": {"levels": levels, "range": (10, 17)}}, budget=500).run()
     assert sum("/tiles/" in p for p in state.requests) == (8 + 1) * 5  # TI03's levels and TI04, each with 4 more
-    assert len(state.requests) <= TitilerBattery.request_bound(CFG, "0.12")
+    assert len(state.requests) <= TitilerBattery.request_bound(CFG, "0.12", "fake")
 
 
 def test_spread_points_stay_inside_the_footprint():

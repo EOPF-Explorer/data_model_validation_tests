@@ -1,8 +1,8 @@
 # eopf-accept: acceptance checks for freshly built EOPF GeoZarr stores
 
 Does a new store work for every consumer, before and after it is registered? This package
-checks the store itself, titiler-eopf on both deployments (`/rstaging`, 0.12 code; `/raster`,
-0.11.1), and the registered STAC item. It sits beside the GDAL suite in this repo and
+checks the store itself, titiler-eopf on both deployments (`/rstaging` and `/raster`, both
+0.12.4), and the registered STAC item. It sits beside the GDAL suite in this repo and
 doesn't touch it.
 
 Slice 1 of the plan. Benchmarks and the OpenLayers browser runner come in later slices.
@@ -30,7 +30,8 @@ uv run eopf-accept run --collection sentinel-3-olci-l1-efr-staging --stage scrat
 # 3. Registered item, read-only against production (prefer the s3:// origin: the gateway caches for 1 h):
 uv run eopf-accept run …same as plan…
 
-# A local or ad-hoc endpoint: NAME=URL@REPORTED_VERSION:API (API 0.11 or 0.12)
+# A local or ad-hoc endpoint: NAME=URL@REPORTED_VERSION:API (API 0.11 or 0.12).
+# TI10 runs only on the endpoint its config names (L2A: raster), so use that NAME to include it.
 uv run eopf-accept run … --endpoint local=http://127.0.0.1:8000@0.12.4:0.12
 ```
 
@@ -101,7 +102,7 @@ Numbers are IDs, not an order; gaps are unused IDs.
 | ST09 | the finest level has data where the coarsest level does | empty conversions |
 | HT02 | each opened group, rooted where titiler roots it, opens with listing forbidden | PROPFIND 405 over HTTP |
 | TR01 | titiler-eopf 0.12's own `GeoZarrReader`: open, zooms, tiles (scratch only) | anything the server would 500 on |
-| TI00–TI10 | per endpoint: version + route fingerprint, /info, tilejson without zoom params, decoded tiles per store level scaled by footprint coverage (a flat tile compared with others in the footprint), RGB channels, cold cache, viewer, URL-form contract, fit-bounds vs minzoom, and where a config names a second stretch, the same levels under it (WARN if flat) | C1, C8, C13, C14 |
+| TI00–TI10 | per endpoint: version + route fingerprint, /info, tilejson without zoom params, decoded tiles per store level scaled by footprint coverage (a flat tile compared with others in the footprint), RGB channels, cold cache, viewer, URL-form contract, fit-bounds vs minzoom, and where a config names a second stretch, the same levels under it on the endpoint it names (WARN if flat) | C1, C8, C13, C14 |
 | RG04/05/07/08 | the item's links render (xyz as PNG, the thumbnail as any image type the suite can decode, issue #8); do they also work on 0.12 (flip readiness); item newer than its store; asset hrefs point exactly at this store's groups | broken links, the /raster flip, stale registrations |
 | GR02 | `generic_rechunker` layout: each dimension chunked to `min(spatial_chunk, size)`, one shard per array (FAIL); 2-D coordinates left uncompressed, and arrays written like coordinates that nothing declares as one (WARN) | rechunking or sharding that drifts from data-model#292's rule |
 | GR03 | CF packing: CF `scale_factor`/`add_offset` and the `scale_offset` codec never both; `_FillValue` fits the dtype (FAIL); a valid range the dtype can't hold (WARN, named first in the summary, issue #8); zarr `fill_value` ≠ CF `_FillValue` (WARN) | double decoding; nodata that readers mask differently |

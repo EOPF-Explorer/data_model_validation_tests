@@ -385,8 +385,8 @@ class TitilerBattery:
         """The same levels under another consumer's stretch (`render.second_stretch`). TI03 decides
         whether the render works; this shows where that consumer sees one flat colour. Flat is a
         WARN, because a fully clouded scene clipping isn't a store defect; a tile that can't be read
-        fails. It runs on one API, since whether data clips doesn't depend on the titiler version, and
-        compares one tile per flat level: a WARN doesn't justify more renders."""
+        fails. It runs on the one endpoint the config names, since whether data clips doesn't depend on
+        the endpoint, and compares one tile per flat level: a WARN doesn't justify more renders."""
         spec = self.cfg["render"]["second_stretch"]
         if not self.tilejson:
             return self.result("TI10", SKIP, "no usable tilejson (TI02)")
@@ -491,13 +491,13 @@ class TitilerBattery:
         if v.status != PASS:
             return [v]
         out = [v, self.ti01_info(), self.ti02_tilejson(), self.ti03_tiles(), self.ti04_rgb(), self.ti06_viewer(), self.ti07_contract(), self.ti09_fit_zoom()]
-        if (self.cfg["render"].get("second_stretch") or {}).get("api") == self.api:
+        if (self.cfg["render"].get("second_stretch") or {}).get("endpoint") == self.name:
             out.append(self.ti10_second_stretch())
         return out + [self.ti05_cold()]
 
     @staticmethod
-    def request_bound(cfg: dict, api: str) -> int:
+    def request_bound(cfg: dict, api: str, name: str) -> int:
         # TI00 TI01 TI02 TI06 one each; TI03's MAX_TILES and TI04's tile, each compared with TILES_ELSEWHERE more;
-        # TI10's MAX_TILES, each compared with one more, on the API it runs on; TI07 one per contract row; 2 slack
-        second = MAX_TILES * 2 if ((cfg.get("render") or {}).get("second_stretch") or {}).get("api") == api else 0
+        # TI10's MAX_TILES, each compared with one more, on the endpoint it runs on; TI07 one per contract row; 2 slack
+        second = MAX_TILES * 2 if ((cfg.get("render") or {}).get("second_stretch") or {}).get("endpoint") == name else 0
         return 6 + (MAX_TILES + 1) * (1 + TILES_ELSEWHERE) + second + len([c for c in cfg.get("contract", []) if c["api"] == api])

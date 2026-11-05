@@ -29,10 +29,10 @@ rescale = ["10,300", "22,345", "36,390"]
 "0.11" = { group = "/measurements/r0", extra = { bidx = "1" } }  # the registered xyz/tilejson link form
 
 [endpoints]
-# `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs
-# titiler-eopf v0.12.4 (d7f86e8), read on 3 Nov.
+# `api` drives the URL syntax; `expect_version` is what /api reports. Both run titiler-eopf
+# v0.12.4 (d7f86e8): /rstaging read on 3 Nov; /raster from the flip's image pin, not yet read.
 rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.12.4" }
-raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11", expect_version = "0.11.1" }
+raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.12", expect_version = "0.12.4" }
 
 # `zooms` is an optional anchor: TI02 compares the tilejson with the range the store's own
 # multiscales give (zooms.oracle) for every item, and with this anchor when it is set.
@@ -95,19 +95,3 @@ check = "ST08"
 match = "float64"
 ref = "OLCI radiance is stored as float64; data-model follow-up (uint16 + scale/offset, or float32)"
 until = "2026-12-31"
-
-# /raster TI02: the minzoom = maxzoom collapse is the link form, not titiler 0.11.1.
-# register_v1 (v1.15.0-s3olci-rc8, _S3_OLCI_BASE_LEVEL = "r0") links the level group
-# /measurements/r0, which has no multiscales, so titiler returns that level's zoom for both
-# (reader.py get_minzoom, same in 0.11.1, 5fbea81 and v0.12.4); /rstaging passes. The first known issue
-# (6 Oct) blamed titiler and was retired on 7 Oct. This one names the real cause and won't be
-# fixed on 0.11: the titiler-eopf >0.12 flip replaces these links (Loïc, 7 Oct, option b; RG05
-# lists the 0.11 links that 422 on /rstaging). It matches only that mechanism, on /raster only.
-[[known_issues]]
-check = "TI02"
-group = "titiler:raster"
-match = "the render reads level group measurements/r0, not the multiscales group measurements"
-ref = "register_v1 rc8 links /measurements/r0 on the 0.11 API; superseded by the titiler-eopf >0.12 flip"
-# A review date, not the flip date (unset on 8 Oct: confirmed when everything is ready to
-# flip). After it this is a FAIL again: extend it if the flip isn't ready, drop it once flipped.
-until = "2026-11-30"

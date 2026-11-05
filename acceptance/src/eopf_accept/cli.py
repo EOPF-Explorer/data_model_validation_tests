@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         budget.reserve("registration", rg.REQUEST_BOUND)
     if "titiler" in groups:
         for name, ep in endpoints.items():
-            budget.reserve(f"titiler:{name}", TitilerBattery.request_bound(cfg, ep["api"]))
+            budget.reserve(f"titiler:{name}", TitilerBattery.request_bound(cfg, ep["api"], name))
 
     if args.cmd == "plan":
         print(f"config: {cfg['_config_path']}")
