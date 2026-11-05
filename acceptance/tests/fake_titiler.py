@@ -13,8 +13,8 @@ from PIL import Image
 from eopf_accept.cli import CONFIG_DIR
 
 ASSET_ROUTE = "/collections/{collection_id}/items/{item_id}/assets/{asset_id}"
-# What /rstaging (api 0.12) and /raster (api 0.11) report, from the configs
-VERSIONS = {ep["api"]: ep["expect_version"] for ep in tomllib.loads((CONFIG_DIR / "sentinel-2-l2a.toml").read_text())["endpoints"].values()}
+# What each API reports: 0.12 from the configs; no config names a 0.11 endpoint now, and 0.11.1 was its last deployment
+VERSIONS = {"0.11": "0.11.1"} | {ep["api"]: ep["expect_version"] for ep in tomllib.loads((CONFIG_DIR / "sentinel-2-l2a.toml").read_text())["endpoints"].values()}
 
 
 class State:

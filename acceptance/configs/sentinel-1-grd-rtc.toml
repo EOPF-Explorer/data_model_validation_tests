@@ -37,10 +37,10 @@ rescale = ["0,0.4", "0,0.1"]
 "0.11" = { group = "/ascending", extra = { bidx = "1" } }   # the registered link form, minus the expression
 
 [endpoints]
-# `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs
-# titiler-eopf v0.12.4 (d7f86e8), read on 3 Nov.
+# `api` drives the URL syntax; `expect_version` is what /api reports. Both run titiler-eopf
+# v0.12.4 (d7f86e8): /rstaging read on 3 Nov; /raster from the flip's image pin, not yet read.
 rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.12.4" }
-raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11", expect_version = "0.11.1" }
+raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.12", expect_version = "0.12.4" }
 
 # Baseline before data-model#292 (chosen 6 Oct): the Venice lagoon tile, 11 slices 23 Jun – 13 Jul
 # 2026, both orbits. `sel` is the slice the cube item's own links render (latest ascending).

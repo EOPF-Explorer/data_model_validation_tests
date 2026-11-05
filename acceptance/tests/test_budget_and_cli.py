@@ -62,7 +62,7 @@ def test_plan_over_the_cap_is_refused():
 
 def test_cli_plan_sends_nothing_and_refuses_over_budget(capsys):
     args = ["plan", "--collection", "sentinel-3-olci-l1-efr-staging", "--store", "s3://b/x.zarr", "--item", "I",
-            "--stage", "registered", "--endpoint", "rstaging", "--endpoint", "raster"]
+            "--stage", "registered", "--endpoint", "rstaging", "--endpoint", "old=http://127.0.0.1:9@0.11.1:0.11"]
     assert cli.main(args) == 0
     out = capsys.readouterr().out
     assert "nothing was sent" in out and "Side effect" in out
@@ -81,7 +81,7 @@ def test_w5_an_item_can_render_the_orbit_it_has(tmp_path, capsys):
         '"0.12" = { route = "asset", asset = "gamma0-rtc-backscatter-desc", extra = { bidx = "1" } } }\n')
     (tmp_path / "s1.toml").write_text(text)
     cli.main(["plan", "--collection", "sentinel-1-grd-rtc-staging", "--config", str(tmp_path / "s1.toml"), "--store", "s3://b/x.zarr",
-              "--item", "s1-rtc-DESC", "--stage", "registered", "--endpoint", "rstaging", "--endpoint", "raster"])
+              "--item", "s1-rtc-DESC", "--stage", "registered", "--endpoint", "rstaging", "--endpoint", "old=http://127.0.0.1:9@0.11.1:0.11"])
     out = capsys.readouterr().out
     assert "variables=/descending:vv" in out and "/assets/gamma0-rtc-backscatter-desc/" in out and "/ascending" not in out
 
