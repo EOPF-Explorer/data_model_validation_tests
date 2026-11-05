@@ -1,14 +1,20 @@
 """The titiler battery against a fake server: each check fails when it should."""
 
 import datetime as dt
+import io
+import struct
 import tomllib
+import zlib
 
+import numpy as np
 import pytest
+from PIL import Image
 
+from eopf_accept import cli, geometry as geo
 from eopf_accept.budget import Budget, Http
 from eopf_accept.cli import CONFIG_DIR
 from eopf_accept.model import FAIL, KNOWN, PASS, VOID, WARN, XFAIL, XPASS, Result, apply_known_issues
-from eopf_accept.titiler_checks import TitilerBattery, extent_px, urls
+from eopf_accept.titiler_checks import TitilerBattery, decoded_stats, extent_px, lonlat_to_tile, png_stats, urls
 
 from .fake_titiler import VERSIONS, State, serve
 from .geozarr_fixture import CFG
@@ -157,6 +163,334 @@ def test_issue1_unchecked_zooms_warn_instead_of_passing(server):
     cfg = {**CFG, "render": {**CFG["render"], "0.12": {"route": "item", "asset": "radianceData"}}}
     r = by_id(battery(base, cfg=cfg).run())["TI02"]
     assert r.status == WARN and any("rio-tiler's STAC reader" in e for e in r.evidence), r.evidence
+
+
+def test_ti03_reads_the_stores_levels_on_the_item_route(server):
+    """The item route's tilejson says 0–24; z0 and z24 say nothing about the store (T33WWP, 3 Nov)."""
+    state, base = server
+    state.zooms = (0, 24)
+    cfg = {**CFG, "render": {**CFG["render"], "0.12": {"route": "item", "asset": "radianceData"}}}
+    b = battery(base, cfg=cfg)
+    assert b.ti02_tilejson().status == WARN  # TI02 still doesn't judge the item route's range
+    state.requests.clear()
+    r = b.ti03_tiles()
+    assert {int(p.split("/tiles/")[1].split("/")[1]) for p in state.requests} == {5, 6, 7, 8, 9}
+    assert r.status == PASS and "one per pyramid level" in r.summary, r.summary
+
+
+FOOTPRINT = geo.bbox_polygon([-36.0, 34.0, -34.0, 36.0])
+
+
+CENTRE = lonlat_to_tile(*geo.interior_point(FOOTPRINT), 9)
+ELSEWHERE = [lonlat_to_tile(*p, 9) for p in geo.spread_points(FOOTPRINT)]  # z9 tiles a flat one is compared with
+
+
+def z9(*tiles, mode="flat"):
+    return {(9, x, y): mode for x, y in tiles}
+
+
+def test_ti03_a_flat_patch_is_not_a_constant_render(server):
+    """T33WWP's centre is bright (cloud or snow) at z13 and z12 (1 and 15 distinct values); the rest has over 150."""
+    state, base = server
+    state.tile_at = z9(CENTRE)
+    r = by_id(battery(base, footprint=FOOTPRINT).run())["TI03"]
+    assert r.status == PASS, r.evidence
+    assert any(e.startswith(f"z9 {CENTRE[0]}/{CENTRE[1]}: a flat patch") for e in r.evidence), r.evidence
+    assert "flat at the centre at z9, varied elsewhere" in r.summary, r.summary  # never looks like a clean pass
+
+
+def test_ti03_compares_a_flat_tile_with_every_spread_tile(server):
+    state, base = server
+    state.tile_at = z9(CENTRE, *ELSEWHERE[:3])
+    assert by_id(battery(base, footprint=FOOTPRINT).run())["TI03"].status == PASS
+
+
+def test_ti03_a_render_flat_everywhere_fails_and_says_what_it_compared(server):
+    state, base = server
+    state.tile = "flat"
+    b = battery(base, footprint=FOOTPRINT)
+    b.ti02_tilejson()
+    state.requests.clear()
+    r = b.ti03_tiles()
+    assert r.status == FAIL
+    assert f"z9 {CENTRE[0]}/{CENTRE[1]}: only 1 distinct values, 100% of valid pixels at PNG value 200, and none of the 4 other tile(s) tried varies with enough valid pixels (a constant render, or values outside or too narrow for the stretch?)" in r.problems, r.problems
+    # at z5 the whole footprint is one tile: nothing was compared, and the report says so
+    assert any(p.startswith("z5 ") and "no other sample point of the footprint falls in another tile" in p for p in r.problems), r.problems
+    assert sum("/tiles/WebMercatorQuad/5/" in p for p in state.requests) == 1  # the flat tile isn't asked for twice
+
+
+def test_png_stats_reports_the_commonest_value_and_its_share():
+    a = np.zeros((10, 10), np.uint8)
+    a[:7] = 255  # 70 pixels at 255, 30 at 0
+    buf = io.BytesIO()
+    Image.fromarray(a).save(buf, "PNG")
+    st = png_stats(buf.getvalue())
+    assert (st["modal"], round(st["modal_share"], 2)) == (255, 0.7)
+
+
+def test_ti03_with_nothing_to_compare_says_where_the_pixels_sit(server):
+    state, base = server
+    state.tile = "flat"
+    b = battery(base, footprint=FOOTPRINT)
+    b.ti02_tilejson()
+    z5 = next(p for p in b.ti03_tiles().problems if p.startswith("z5 "))
+    assert "100% of valid pixels at PNG value 200" in z5 and "too narrow for the stretch" in z5, z5
+
+
+L2A = tomllib.loads((CONFIG_DIR / "sentinel-2-l2a.toml").read_text())
+
+
+def test_l2a_threshold_lets_dark_water_clear_a_flat_tile_but_not_a_flat_render(server):
+    """T27SVB, a healthy ocean scene, has 11 and 10 distinct values on its best tiles at 0,1."""
+    state, base = server
+    cfg = {**CFG, "min_distinct": L2A["min_distinct"]}
+    state.tile_at = z9(CENTRE) | z9(*ELSEWHERE, mode="dark")
+    assert by_id(battery(base, cfg=cfg, footprint=FOOTPRINT).run())["TI03"].status == PASS
+    state.tile_at, state.tile = {}, "flat"
+    assert by_id(battery(base, cfg=cfg, footprint=FOOTPRINT).run())["TI03"].status == FAIL
+
+
+EXPLORER = {"name": "the Explorer's true colour", "rescale": "0,0.5", "min_distinct": 10, "api": "0.12"}
+SECOND = {**CFG, "render": {**CFG["render"], "second_stretch": EXPLORER}}
+
+
+def at_second_stretch(*tiles, mode="flat"):
+    return {(9, x, y, "0,0.5"): mode for x, y in tiles}
+
+
+def test_ti10_runs_only_where_a_config_names_a_second_stretch(server):
+    state, base = server
+    assert "TI10" not in by_id(battery(base, footprint=FOOTPRINT).run())
+    state.requests.clear()
+    r = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"]
+    assert r.status == PASS and "the Explorer's true colour" in r.summary and "0,0.5" in r.summary, r.summary
+    second = [p for p in state.requests if "rescale=0%2C0.5" in p or "rescale=0,0.5" in p]
+    assert second and all(p.count("rescale=") == 1 for p in second), second[:2]  # its stretch, not as well as TI03's
+
+
+def test_ti10_warns_where_the_second_stretch_clips_and_ti03_is_unaffected(server):
+    """T25WFP, 100 % cloud: varied at the links' 0,1, flat at z13 under the Explorer's 0,0.5."""
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE, ELSEWHERE[0])
+    res = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())
+    assert res["TI10"].status == WARN and "z9" in res["TI10"].summary and "PNG value 200" in res["TI10"].summary, res["TI10"].summary
+    assert res["TI10"].problems == []
+    assert res["TI03"].status == PASS and "flat" not in res["TI03"].summary, res["TI03"].summary
+
+
+def test_ti10_a_flat_patch_is_not_a_warning(server):
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE)
+    r = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"]
+    assert r.status == PASS and "flat at the centre at z9" in r.summary, r.summary
+
+
+def test_ti10_judges_flatness_with_its_own_threshold(server):
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE, *ELSEWHERE, mode="dark")  # 11 distinct: clears 10, not 16
+    assert by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"].status == PASS
+    strict = {**CFG, "render": {**CFG["render"], "second_stretch": {**EXPLORER, "min_distinct": 16}}}
+    assert by_id(battery(base, cfg=strict, footprint=FOOTPRINT).run())["TI10"].status == WARN
+
+
+def test_ti10_doesnt_call_a_tile_with_no_valid_pixels_a_flat_colour(server):
+    """Nodata isn't a colour a viewer shows, and TI03 already judges valid pixels."""
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE, ELSEWHERE[0], mode="empty")
+    r = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"]
+    assert r.status == PASS and "no valid pixels at z9" in r.summary and "every level varies" not in r.summary, r.summary
+
+
+def test_ti10_skips_when_no_level_has_valid_pixels(server):
+    state, base = server
+    b = battery(base, cfg=SECOND, footprint=FOOTPRINT)
+    b.ti02_tilejson()
+    state.tile = "empty"
+    assert b.ti10_second_stretch().status == "SKIP"
+
+
+def test_ti10_runs_on_its_configured_api_only(server):
+    """Whether this data clips at this stretch doesn't depend on the titiler version."""
+    state, base = server
+    state.api = "0.11"
+    res = by_id(battery(base, ep=RASTER, cfg=SECOND, footprint=FOOTPRINT).run())
+    assert "TI03" in res and "TI10" not in res, sorted(res)
+    assert TitilerBattery.request_bound(SECOND, "0.12") - TitilerBattery.request_bound(SECOND, "0.11") == 8 * 2
+
+
+def test_ti10_sends_its_stretch_even_if_the_render_has_none(server):
+    state, base = server
+    render = {k: v for k, v in SECOND["render"].items() if k != "rescale"}
+    b = battery(base, cfg={**CFG, "render": render}, footprint=FOOTPRINT)
+    b.ti02_tilejson()
+    state.requests.clear()
+    b.ti10_second_stretch()
+    tiles = [p for p in state.requests if "/tiles/" in p]
+    assert tiles and all("rescale=0" in p for p in tiles), tiles[:2]
+
+
+def test_decoded_stats_leaves_the_suites_own_bugs_visible(monkeypatch):
+    """Only decoding is excused: a bug in the statistics must not read as a bad server response."""
+    buf = io.BytesIO()
+    Image.fromarray(np.zeros((4, 4), np.uint8)).save(buf, "PNG")
+    assert decoded_stats(buf.getvalue())["distinct"] == 1
+    monkeypatch.setattr(np, "unique", lambda *a, **k: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        decoded_stats(buf.getvalue())
+
+
+def test_ti10_a_tile_it_cant_read_fails(server):
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE, mode="error")
+    r = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"]
+    assert r.status == FAIL and "HTTP 500" in r.summary and r.problems, r.summary
+    state.tile_at = at_second_stretch(CENTRE) | at_second_stretch(ELSEWHERE[0], mode="error")
+    r = by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"]
+    assert r.status == FAIL and "HTTP 500" in r.summary, r.summary
+
+
+def test_ti10_compares_a_flat_tile_with_one_other_tile_only(server):
+    """A WARN doesn't justify a level's worst case of four more renders on the shared cache."""
+    state, base = server
+    state.tile_at = at_second_stretch(CENTRE, ELSEWHERE[0])  # the second tile tried would vary
+    assert by_id(battery(base, cfg=SECOND, footprint=FOOTPRINT).run())["TI10"].status == WARN
+
+
+def test_every_flat_level_stays_within_the_bound_with_a_second_stretch(server):
+    state, base = server
+    state.tile, state.zooms = "flat", (10, 17)
+    levels = [(f"measurements/r{i}", z) for i, z in enumerate(range(17, 9, -1))]
+    state.requests.clear()
+    battery(base, cfg=SECOND, footprint=FOOTPRINT, oracle={"measurements": {"levels": levels, "range": (10, 17)}}, budget=500).run()
+    assert sum("/tiles/" in p for p in state.requests) == (8 + 1) * 5 + 8 * 2
+    assert len(state.requests) <= TitilerBattery.request_bound(SECOND, "0.12")
+
+
+def test_l2a_config_tests_the_links_stretch_and_the_explorers():
+    assert L2A["render"]["rescale"] == ["0,1", "0,1", "0,1"] and L2A["min_distinct"] == 5
+    assert L2A["render"]["second_stretch"]["rescale"] == "0,0.5" and L2A["render"]["second_stretch"]["min_distinct"] == 10
+    assert L2A["render"]["second_stretch"]["api"] == "0.12"
+
+
+def test_the_registered_l2a_plan_fits_the_default_budget(capsys):
+    """The README's registered form with both endpoints, the largest plan a user runs: registration
+    requests count too, and a plan over budget refuses to start."""
+    cli.main(["plan", "--collection", "sentinel-2-l2a", "--stage", "registered", "--store", "s3://ci/b/x.zarr", "--item", "demo",
+              "--endpoint", "a=http://127.0.0.1:9@0.12.4:0.12", "--endpoint", "b=http://127.0.0.1:9@0.11.1:0.11"])
+    out = capsys.readouterr().out
+    assert "registration" in out and "fits" in out and "REFUSED" not in out, out
+
+
+def test_ti03_a_tile_with_few_valid_pixels_cant_clear_a_flat_one(server):
+    state, base = server
+    state.tile_at = z9(CENTRE) | z9(*ELSEWHERE, mode="sparse")  # 5 % valid, plenty of distinct values
+    r = by_id(battery(base, footprint=FOOTPRINT).run())["TI03"]
+    assert r.status == FAIL and any("none of the 4 other tile(s) tried" in p for p in r.problems), r.problems
+
+
+def test_ti03_reports_a_failed_tile_it_compared(server):
+    state, base = server
+    state.tile_at = z9(CENTRE) | z9(ELSEWHERE[0], mode="error")  # the next tile varies, the 500 still counts
+    r = by_id(battery(base, footprint=FOOTPRINT).run())["TI03"]
+    assert r.status == FAIL and len(r.problems) == 1 and "HTTP 500" in r.problems[0], r.problems
+    assert any("a flat patch" in e for e in r.evidence), r.evidence
+    state.tile_at = z9(CENTRE) | z9(*ELSEWHERE, mode="error")  # server errors, not a flat footprint
+    r = by_id(battery(base, footprint=FOOTPRINT).run())["TI03"]
+    assert r.status == FAIL and "HTTP 500" in r.summary and not any("constant render" in p for p in r.problems), r.problems
+
+
+def test_a_tile_that_cant_be_decoded_fails_its_check_and_the_battery_goes_on(server):
+    """Uncaught, the decode error stopped the run at the CLI's outer handler and lost every later check."""
+    state, base = server
+    state.tile_at = z9(CENTRE, mode="corrupt")
+    res = by_id(battery(base, footprint=FOOTPRINT).run())
+    assert res["TI03"].status == FAIL and "not a decodable PNG" in res["TI03"].summary, res["TI03"].summary
+    assert res["TI06"].status == PASS  # the battery carried on
+    state.tile_at, state.tile = {}, "corrupt"
+    r = by_id(battery(base, footprint=FOOTPRINT).run())["TI04"]
+    assert r.status == FAIL and "not a decodable PNG" in r.summary and r.evidence == [], (r.summary, r.evidence)
+
+
+def test_decoded_stats_survives_whatever_pillow_raises():
+    ihdr = b"\x00\x00\x00\x05IHDR" + bytes(5)  # Pillow: ValueError, Truncated IHDR chunk
+    short = b"\x89PNG\r\n\x1a\n" + ihdr + struct.pack(">I", zlib.crc32(ihdr[4:]))
+    assert decoded_stats(short) is None and decoded_stats(b"<html></html>") is None and decoded_stats(b"") is None
+
+
+def test_a_body_that_cant_be_read_fails_its_check_and_the_battery_goes_on(server):
+    """A gateway's bad Content-Encoding raises httpx.DecodingError, which isn't a TransportError."""
+    state, base = server
+    state.tile_at = z9(CENTRE, mode="badgzip")
+    res = by_id(battery(base, footprint=FOOTPRINT).run())
+    assert res["TI03"].status == FAIL and "HTTP 599" in res["TI03"].summary and "DecodingError" in res["TI03"].summary, res["TI03"].summary
+    assert res["TI06"].status == PASS
+
+
+def test_ti03_says_why_it_has_no_store_levels_on_the_item_route(server):
+    """Unusable store metadata must not bring back z0 and z24, and the report gives the real reason."""
+    state, base = server
+    state.zooms = (0, 24)
+    cfg = {**CFG, "render": {**CFG["render"], "0.12": {"route": "item", "asset": "radianceData"}}}
+    b = battery(base, cfg=cfg, oracle={"measurements": "no proj:code"})
+    r2 = b.ti02_tilejson()
+    assert r2.status == WARN and any("no proj:code" in e for e in r2.evidence), r2.evidence
+    state.requests.clear()
+    r = b.ti03_tiles()
+    assert {int(p.split("/tiles/")[1].split("/")[1]) for p in state.requests} == {12}
+    assert r.status == PASS and "the tilejson's middle zoom" in r.summary and any("no proj:code" in e for e in r.evidence), (r.summary, r.evidence)
+
+
+def test_ti03_the_coarsest_levels_exemption_also_covers_the_tiles_it_compares(server):
+    """The coarsest tile only needs "not all nodata", and so do the tiles a flat one is compared with."""
+    state, base = server
+    wide = geo.bbox_polygon([-60.0, 10.0, -10.0, 50.0])  # several tiles at z5
+    centre = lonlat_to_tile(*geo.interior_point(wide), 5)
+    others = {lonlat_to_tile(*p, 5) for p in geo.spread_points(wide)} - {centre}
+    assert others
+    state.tile_at = {(5, *centre): "flat"} | {(5, *t): "sparse" for t in others}
+    r = by_id(battery(base, footprint=wide).run())["TI03"]
+    assert r.status == PASS and "flat at the centre at z5" in r.summary, (r.summary, r.evidence)
+
+
+def test_ti04_takes_its_zoom_from_the_stores_levels(server):
+    state, base = server
+    state.zooms = (0, 24)
+    cfg = {**CFG, "render": {**CFG["render"], "0.12": {"route": "item", "asset": "radianceData"}}}
+    r = by_id(battery(base, cfg=cfg).run())["TI04"]
+    assert r.status == PASS and r.summary.startswith("RGB tile z7"), r.summary
+
+
+def test_ti04_a_grey_patch_is_not_one_variable_served_three_times(server):
+    """A cloud that clips in all three bands is grey there; a render with one band is grey everywhere."""
+    state, base = server
+    state.zooms = (8, 10)
+    oracle = {"measurements": {"levels": [("measurements/r0", 10), ("measurements/r2", 9), ("measurements/r4", 8)], "range": (8, 10)}}
+    state.tile_at = z9(CENTRE, mode="gray")
+    r = by_id(battery(base, footprint=FOOTPRINT, oracle=oracle).run())["TI04"]
+    assert r.status == PASS and "grey at the centre" in r.summary, r.summary
+    state.tile_at = z9(CENTRE, mode="gray") | z9(ELSEWHERE[0], mode="error")
+    r = by_id(battery(base, footprint=FOOTPRINT, oracle=oracle).run())["TI04"]
+    assert r.status == FAIL and "HTTP 500" in r.summary, r.summary
+    state.tile_at, state.tile = {}, "gray"
+    r = by_id(battery(base, footprint=FOOTPRINT, oracle=oracle).run())["TI04"]
+    assert r.status == FAIL and "as have the 4 other tile(s) tried" in r.summary, r.summary
+
+
+def test_request_bound_covers_every_flat_tile_compared_elsewhere(server):
+    """`plan` promises an upper bound: the worst case is MAX_TILES levels, all flat, RGB flat too."""
+    state, base = server
+    state.tile, state.zooms = "flat", (10, 17)
+    levels = [(f"measurements/r{i}", z) for i, z in enumerate(range(17, 9, -1))]
+    state.requests.clear()
+    battery(base, footprint=FOOTPRINT, oracle={"measurements": {"levels": levels, "range": (10, 17)}}, budget=500).run()
+    assert sum("/tiles/" in p for p in state.requests) == (8 + 1) * 5  # TI03's levels and TI04, each with 4 more
+    assert len(state.requests) <= TitilerBattery.request_bound(CFG, "0.12")
+
+
+def test_spread_points_stay_inside_the_footprint():
+    triangle = {"type": "Polygon", "coordinates": [[[0, 0], [4, 0], [0, 4], [0, 0]]]}
+    points = geo.spread_points(triangle)
+    assert (3, 3) not in points and points and all(geo.contains(triangle, *p) for p in points)
 
 
 def test_item_render_extra_reaches_every_render(server):

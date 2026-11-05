@@ -6,7 +6,7 @@ import pytest
 
 from eopf_accept import registration as rg
 from eopf_accept.budget import Budget, Http
-from eopf_accept.model import FAIL, PASS, WARN
+from eopf_accept.model import FAIL, PASS, SKIP, WARN
 from eopf_accept.storeio import StoreReader
 
 from .fake_titiler import State, serve
@@ -174,6 +174,16 @@ def test_rg10_the_battery_tests_the_registered_link_form(server, tmp_path):
     assert rg.rg10_link_form(item, fixed).status == FAIL
     s1 = {"links": [{"rel": "xyz", "href": "https://x/raster/t.png?expression=%2Fascending%3Avv%3B%28%2Fascending%3Avv%29%2F%28%2Fascending%3Avh%29"}]}
     assert rg.link_groups(s1["links"][0]["href"]) == {"/ascending"}
+
+
+def test_rg07_skips_when_the_store_sends_no_last_modified():
+    """data.eodc.eu sends none and obstore reports the epoch, so every item looked newer than its store."""
+    class NoLastModified:
+        def head(self, path):
+            return {"last_modified": dt.datetime(1970, 1, 1, tzinfo=dt.UTC)}
+
+    res = rg.rg07_fresh({"properties": {"updated": now_iso()}, "links": []}, NoLastModified(), Http(Budget(5)))
+    assert res.status == SKIP and "store Last-Modified (None)" in res.summary, res.summary
 
 
 def test_link_zoom_falls_back_when_the_tilejson_has_no_zooms(server):

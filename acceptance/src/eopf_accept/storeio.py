@@ -38,7 +38,7 @@ class StoreReader:
         self.budget = budget
         self._stores: dict[str, object] = {}
         scheme = urlparse(self.url).scheme
-        # object_store's own truthy values (y and Y included; verified against obstore 0.11)
+        # object_store's own truthy values (y and Y included; verified against obstore 0.12)
         self.unsigned = scheme in ("http", "https") or (
             scheme == "s3" and os.environ.get("AWS_SKIP_SIGNATURE", "").lower() in ("1", "true", "yes", "y", "on"))
         self.absent = (FileNotFoundError, PermissionDeniedError) if forbidden_is_missing and self.unsigned else (FileNotFoundError,)

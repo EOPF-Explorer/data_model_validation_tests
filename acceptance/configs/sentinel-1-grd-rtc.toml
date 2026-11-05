@@ -38,8 +38,8 @@ rescale = ["0,0.4", "0,0.1"]
 
 [endpoints]
 # `api` drives the URL syntax; `expect_version` is what /api reports. /rstaging runs
-# titiler-eopf v0.12.2 (73b01a5) since 8 Oct.
-rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.12.2" }
+# titiler-eopf v0.12.4 (d7f86e8), read on 3 Nov.
+rstaging = { base = "https://api.explorer.eopf.copernicus.eu/rstaging", api = "0.12", expect_version = "0.12.4" }
 raster = { base = "https://api.explorer.eopf.copernicus.eu/raster", api = "0.11", expect_version = "0.11.1" }
 
 # Baseline before data-model#292 (chosen 6 Oct): the Venice lagoon tile, 11 slices 23 Jun – 13 Jul

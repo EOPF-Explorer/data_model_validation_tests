@@ -23,7 +23,8 @@ class State:
         self.api = "0.12"  # which routes /api lists
         self.tilejson_status = 200
         self.zooms = (5, 9)  # tilejson minzoom, maxzoom
-        self.tile = "good"  # good | empty | gray | sparse (5 % valid)
+        self.tile = "good"  # good | empty | gray | sparse (5 % valid) | flat (one value) | dark (11 values)
+        self.tile_at: dict[tuple, str] = {}  # (z, x, y), or (z, x, y, rescale) → a `tile` mode, error (HTTP 500), corrupt or badgzip, for that tile only
         self.x_cache = "MISS"
         self.bounds = [-36.0, 34.0, -34.0, 36.0]
         self.force_status: int | None = None  # answer everything with this (503, 302)
@@ -39,7 +40,7 @@ def _png(n_bands: int, mode: str, fmt: str = "PNG") -> bytes:
     alpha = np.full((h, w), 0 if mode == "empty" else 255, np.uint8)
     if mode == "sparse":
         alpha[h // 20:, :] = 0
-    base = rng.integers(0, 255, (h, w), dtype=np.uint8)
+    base = np.full((h, w), 200, np.uint8) if mode == "flat" else rng.integers(0, 11 if mode == "dark" else 255, (h, w), dtype=np.uint8)
     if n_bands >= 3:
         bands = [base] * 3 if mode == "gray" else [base, np.roll(base, 1), np.roll(base, 2)]
         img = Image.fromarray(np.dstack([*bands, alpha]), "RGBA")
@@ -102,7 +103,15 @@ def serve(state: State):
                                "svg": (b'<svg xmlns="http://www.w3.org/2000/svg"/>', "image/svg+xml")}[state.thumbnail]
                 return self.send(200, body, ctype)
             if u.path.endswith(".png"):
-                return self.send(200, _png(n, state.tile), "image/png")
+                zxy = tuple(int(p) for p in u.path.removesuffix(".png").split("/")[-3:]) if "/tiles/" in u.path else None
+                mode = state.tile_at.get(zxy and (*zxy, dict(q).get("rescale")), state.tile_at.get(zxy, state.tile))
+                if mode == "error":
+                    return self.send(500, b"Internal Server Error", "text/plain")
+                if mode == "corrupt":
+                    return self.send(200, b"<html>upstream error</html>", "image/png")
+                if mode == "badgzip":
+                    return self.send(200, b"not gzip", "image/png", {"Content-Encoding": "gzip"})
+                return self.send(200, _png(n, mode), "image/png")
             if u.path.endswith("/info"):
                 return self.send(200, json.dumps({"bounds": [-36, 34, -34, 36]}).encode(), "application/json")
             if u.path.endswith("map.html") or u.path.endswith("/viewer"):

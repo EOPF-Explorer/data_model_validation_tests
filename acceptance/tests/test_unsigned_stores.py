@@ -117,7 +117,7 @@ def test_a_signed_reader_still_raises_on_403(bucket, monkeypatch):
 @pytest.mark.parametrize("endpoint_var, skip", [("AWS_ENDPOINT_URL", "true"), ("AWS_ENDPOINT", "y")])
 def test_plan_says_where_an_s3_store_is_read_from(monkeypatch, capsys, endpoint_var, skip):
     """A shell still holding another run's endpoint sends s3:// reads there. obstore also
-    reads AWS_ENDPOINT, and takes "y" as true (both checked against obstore 0.11)."""
+    reads AWS_ENDPOINT, and takes "y" as true (both checked against obstore 0.12)."""
     for k in ("AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_URL", "AWS_ENDPOINT"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv(endpoint_var, "https://objects.example.org")
