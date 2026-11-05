@@ -1,0 +1,77 @@
+# Dataset configuration for Sentinel-2 L2A — NEW datamodel (Zarr v3 + sharding)
+# Use with: EOPF_DATASET_CONFIG=configs/sentinel2_l2a_v3.toml
+#
+# Differences vs configs/sentinel2_l2a.toml (old T30VVK item):
+#   * Zarr v3 store (zarr.json) with sharding_indexed codec:
+#       outer chunk = full 10980x10980 array (1 shard), inner shard chunk = 244x244,
+#       compressed with blosc, crc32c shard index.
+#   * GDAL exposes the inner shard chunk (244x244) as the raster block size.
+#   * /measurements/reflectance now declares the `multiscales` zarr convention:
+#     resolution levels are sibling groups (r10m, r20m, r60m, r120m, r360m, r720m),
+#     and GDAL surfaces r20m..r720m as the 5 overview levels of the r10m bands.
+#
+# Reference item: S2C_MSIL2A_20260903T135731_N0512_R010_T26WME_20260903T171314
+#   (Greenland Sea tile, UTM 26N, processing baseline N0512 / EOPF-CPM 2.7.0).
+#   Earlier v3 reference item was S2A_..._T30TXP_... (UTM 30N, EPSG:32630) — the only
+#   config value that differs between the two is `crs_authority_code`.
+
+[dataset]
+name = "Sentinel-2 L2A (Zarr v3 / sharded datamodel)"
+description = "EOPF GeoZarr v3 (sharded, multiscales) format, accessed via GDAL Zarr driver over vsicurl"
+# Float32 surface reflectance range for thumbnail visualisation (same physical range as v2).
+vis_scale = [0.0, 0.3]
+
+# Band opened for metadata, export, reproject, overviews, and conventions tests
+[default_band]
+zarr_path = "/measurements/reflectance/r10m/b02"
+
+[expected]
+# EPSG authority code to assert in the dataset CRS. Omit to skip the check.
+# T26WME tile = WGS 84 / UTM zone 26N = EPSG:32626
+crs_authority_code = "32626"
+
+# Expected chunk/block size [x, y]. Omit to skip the check.
+# v3 sharded r10m band: GDAL reports the inner shard chunk (244x244) as the block size.
+block_size = [244, 244]
+
+# Minimum number of overview levels expected.
+# This item exposes 5 levels (5490, 1830, 915, 305, 152).
+min_overview_count = 3
+
+# Upper bound on network bytes for a single-chunk (shard-aligned) partial read.
+# Measured: a 244x244 window fetches the shard index + one inner chunk ~= 497 KB total.
+# Budget set to 2048 KB; the subcheck reports the real figure.
+partial_read_max_kb = 2048
+
+# Maximum HTTP HEAD requests allowed during a gdalinfo call (consolidated metadata check).
+consolidated_head_max = 50
+
+# Band used to verify that GDAL decodes CF scale_factor/add_offset into Scale/Offset
+# (EOPF-Explorer/data-pipeline#181). The reflectance bands store Float32 physical values
+# with no scaling, so they can never exercise this; AOT is uint16 with scale_factor=0.001.
+[scale_offset_band]
+zarr_path       = "/quality/atmosphere/r10m/aot"
+expected_scale  = 0.001
+expected_offset = 0.0
+
+# RGB bands for the true-colour composite (Task 5). Remove this section to skip the test.
+[rgb_composite]
+red   = "/measurements/reflectance/r10m/b04"
+green = "/measurements/reflectance/r10m/b03"
+blue  = "/measurements/reflectance/r10m/b02"
+
+# Resolution bands to validate (Task 7). One entry per resolution to check.
+[[resolution_bands]]
+zarr_path            = "/measurements/reflectance/r10m/b02"
+label                = "r10m"
+expected_pixel_size_m = 10.0
+
+[[resolution_bands]]
+zarr_path            = "/measurements/reflectance/r20m/b05"
+label                = "r20m"
+expected_pixel_size_m = 20.0
+
+[[resolution_bands]]
+zarr_path            = "/measurements/reflectance/r60m/b01"
+label                = "r60m"
+expected_pixel_size_m = 60.0
