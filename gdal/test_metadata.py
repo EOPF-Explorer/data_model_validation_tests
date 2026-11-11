@@ -71,20 +71,54 @@ def test_metadata(dataset_url, dataset_config, report, gdal_version):
     # ------------------------------------------------------------------
     # Band metadata: Scale, Offset, NoData/fill value, units
     # ------------------------------------------------------------------
-    scale_m    = re.search(r"^\s+Scale=([0-9.eE+\-]+)", out, re.M)
-    offset_m   = re.search(r"^\s+Offset=([0-9.eE+\-]+)", out, re.M)
     nodata_m   = re.search(r"NoData Value=(\S+)|FILL_VALUE=(\S+)", out, re.I)
     units_m    = re.search(r"\bunit[s]?\b[= ]*(\S+)", out, re.I)
 
-    scale_ok   = scale_m is not None
-    offset_ok  = offset_m is not None
     nodata_ok  = nodata_m is not None
     units_ok   = units_m is not None
 
-    scale_disp  = scale_m.group(1)  if scale_m  else "not found"
-    offset_disp = offset_m.group(1) if offset_m else "not found"
     nodata_disp = (nodata_m.group(1) or nodata_m.group(2)) if nodata_m else "not found"
     units_disp  = units_m.group(1)  if units_m  else "not found"
+
+    # Scale/Offset are probed on a band that is actually expected to carry them.
+    # The reflectance bands store Float32 physical values with no scaling, so probing
+    # them can only ever report "not found" — which says nothing about GDAL's ability
+    # to decode CF scale_factor/add_offset. `[scale_offset_band]` in the dataset config
+    # names a scaled integer band (e.g. uint16 AOT with scale_factor=0.001) instead.
+    so_cfg = cfg.scale_offset_band
+    if so_cfg:
+        so_url = make_zarr_url(dataset_url, so_cfg.zarr_path)
+        so_out = run_gdalinfo(so_url).stdout
+        so_label = so_cfg.zarr_path
+    else:
+        so_url = url
+        so_out = out
+        so_label = cfg.default_band_path
+
+    # gdalinfo prints these on one line as: "  Offset: 0,   Scale:0.001"
+    scale_m  = re.search(r"^\s+(?:Offset:.*?,\s*)?Scale[:=]\s*([0-9.eE+\-]+)", so_out, re.M)
+    offset_m = re.search(r"^\s+Offset[:=]\s*([0-9.eE+\-]+)", so_out, re.M)
+
+    scale_ok   = scale_m is not None
+    offset_ok  = offset_m is not None
+
+    scale_disp  = scale_m.group(1)  if scale_m  else "not found"
+    offset_disp = offset_m.group(1) if offset_m else "not found"
+
+    if so_cfg:
+        assert scale_ok, (
+            f"GDAL reported no Scale for {so_label}, which declares scale_factor. "
+            f"gdalinfo band section:\n{so_out[-500:]}"
+        )
+        assert offset_ok, f"GDAL reported no Offset for {so_label}, which declares add_offset"
+        if so_cfg.expected_scale is not None:
+            assert abs(float(scale_disp) - so_cfg.expected_scale) < 1e-12, (
+                f"Scale={scale_disp}, expected {so_cfg.expected_scale}"
+            )
+        if so_cfg.expected_offset is not None:
+            assert abs(float(offset_disp) - so_cfg.expected_offset) < 1e-12, (
+                f"Offset={offset_disp}, expected {so_cfg.expected_offset}"
+            )
 
     # ------------------------------------------------------------------
     # Consolidated metadata: HEAD request count
@@ -103,8 +137,8 @@ def test_metadata(dataset_url, dataset_config, report, gdal_version):
         f"[{ck(pixel_ok)}] GeoTransform / pixel size: {pixel_x}m (r10m band, expect ~10m)",
         f"[{ck(ovr_ok)}] Overviews listed: {ovr_count} levels (expect ≥{cfg.min_overview_count})",
         f"[{ck(block_ok)}] Block/chunk size: {cfg.block_size[0]}×{cfg.block_size[1]}" if cfg.block_size else "[ ] Block/chunk size: not configured",
-        f"[{ck(scale_ok)}] Band metadata — Scale: {scale_disp}",
-        f"[{ck(offset_ok)}] Band metadata — Offset: {offset_disp}",
+        f"[{ck(scale_ok)}] Band metadata — Scale: {scale_disp} (probed on {so_label})",
+        f"[{ck(offset_ok)}] Band metadata — Offset: {offset_disp} (probed on {so_label})",
         f"[{ck(nodata_ok)}] Band metadata — NoData/fill value: {nodata_disp}",
         f"[{ck(units_ok)}] Band metadata — units: {units_disp}",
         f"[{ck(consol_ok)}] Consolidated metadata: {head_count} HEAD requests (threshold < {cfg.consolidated_head_max})",
@@ -132,6 +166,9 @@ def test_metadata(dataset_url, dataset_config, report, gdal_version):
         details=" ".join(details_parts),
         subchecks=subchecks,
         head_count=head_count,
-        cli_commands=[f"CPL_VSIL_SHOW_NETWORK_STATS=YES gdalinfo '{url}'"],
+        cli_commands=[
+            f"CPL_VSIL_SHOW_NETWORK_STATS=YES gdalinfo '{url}'",
+            f"# Scale/Offset decoding (CF scale_factor/add_offset on a scaled integer band)\ngdalinfo '{so_url}'",
+        ],
         output_snippet=out,
     ))
